@@ -41,13 +41,22 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: - Private Properties
 
-    private let center = UNUserNotificationCenter.current()
+    private var _center: UNUserNotificationCenter?
+    private var center: UNUserNotificationCenter {
+        if _center == nil {
+            _center = UNUserNotificationCenter.current()
+            _center?.delegate = self
+        }
+        return _center!
+    }
 
     // MARK: - Init
 
     override init() {
         super.init()
-        center.delegate = self
+        // center is lazy-loaded on first use to avoid crash when
+        // UNUserNotificationCenter.current() is called before the
+        // app bundle is fully initialized (e.g., during SPM testing)
     }
 
     // MARK: - Setup
