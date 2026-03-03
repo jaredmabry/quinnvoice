@@ -29,6 +29,9 @@ actor ContextLoader {
     /// Memory text to inject into system instructions.
     var memoryContent: String?
 
+    /// Priority for resolving soul/memory when OpenClaw is also available.
+    var contextPriority: ContextPriority = .openclawFirst
+
     /// Approximate character threshold for MEMORY.md summarization (~2000 tokens).
     private let memorySummarizationThreshold = 8000
 
@@ -49,6 +52,11 @@ actor ContextLoader {
         self.memoryContent = content
     }
 
+    /// Update the context priority.
+    func setContextPriority(_ priority: ContextPriority) {
+        self.contextPriority = priority
+    }
+
     /// Build the full system instruction string from workspace context files.
     /// - Parameter screenContext: Optional pre-captured screen context string to include.
     func loadSystemInstructions(screenContext: String? = nil) async -> String {
@@ -61,33 +69,72 @@ actor ContextLoader {
         Skip filler phrases — just help. Have opinions. Be resourceful.
         """)
 
-        // Inject soul/personality from SoulManager (takes priority over workspace SOUL.md)
-        if let soul = soulContent, !soul.isEmpty {
-            parts.append("## Persona\n\(soul)")
-        } else if let soul = await loadFile("SOUL.md") {
-            parts.append("## Persona\n\(soul)")
-        }
+        // Load soul/memory based on context priority
+        let openclawSoul = await loadFile("SOUL.md")
+        let openclawIdentity = await loadFile("IDENTITY.md")
+        let openclawUser = await loadFile("USER.md")
+        let openclawMemory = await loadFile("MEMORY.md")
+        let appSoul = (soulContent?.isEmpty == false) ? soulContent : nil
+        let appMemory = (memoryContent?.isEmpty == false) ? memoryContent : nil
 
-        // Load IDENTITY.md
-        if let identity = await loadFile("IDENTITY.md") {
-            parts.append("## Identity\n\(identity)")
-        }
+        switch contextPriority {
+        case .appOnly:
+            // Always use app files, ignore OpenClaw
+            if let soul = appSoul {
+                parts.append("## Persona\n\(soul)")
+            }
+            if let memory = appMemory {
+                let compressed = await compressIfNeeded(memory, label: "app memory")
+                parts.append("## Memory\n\(compressed)")
+            }
 
-        // Load USER.md
-        if let user = await loadFile("USER.md") {
-            parts.append("## About the User\n\(user)")
-        }
+        case .openclawFirst:
+            // Use OpenClaw if available, fall back to app files
+            if let soul = openclawSoul {
+                parts.append("## Persona\n\(soul)")
+            } else if let soul = appSoul {
+                parts.append("## Persona\n\(soul)")
+            }
 
-        // Inject on-device memory from MemoryManager (takes priority over workspace MEMORY.md)
-        if let memory = memoryContent, !memory.isEmpty {
-            let memoryCompressed = await compressIfNeeded(memory, label: "on-device memory")
-            parts.append("## On-Device Memory\n\(memoryCompressed)")
-        }
+            if let identity = openclawIdentity {
+                parts.append("## Identity\n\(identity)")
+            }
+            if let user = openclawUser {
+                parts.append("## About the User\n\(user)")
+            }
 
-        // Load workspace MEMORY.md (summarize if too long)
-        if let memory = await loadFile("MEMORY.md") {
-            let memoryContent = await compressIfNeeded(memory, label: "MEMORY.md")
-            parts.append("## Memory\n\(memoryContent)")
+            if let memory = openclawMemory {
+                let compressed = await compressIfNeeded(memory, label: "MEMORY.md")
+                parts.append("## Memory\n\(compressed)")
+            } else if let memory = appMemory {
+                let compressed = await compressIfNeeded(memory, label: "app memory")
+                parts.append("## Memory\n\(compressed)")
+            }
+
+        case .merged:
+            // App personality as base layer, OpenClaw context on top
+            if let soul = appSoul {
+                parts.append("## Base Persona\n\(soul)")
+            }
+            if let soul = openclawSoul {
+                parts.append("## Agent Persona\n\(soul)")
+            }
+
+            if let identity = openclawIdentity {
+                parts.append("## Identity\n\(identity)")
+            }
+            if let user = openclawUser {
+                parts.append("## About the User\n\(user)")
+            }
+
+            if let memory = appMemory {
+                let compressed = await compressIfNeeded(memory, label: "app memory")
+                parts.append("## On-Device Memory\n\(compressed)")
+            }
+            if let memory = openclawMemory {
+                let compressed = await compressIfNeeded(memory, label: "MEMORY.md")
+                parts.append("## Agent Memory\n\(compressed)")
+            }
         }
 
         // Include screen context if provided

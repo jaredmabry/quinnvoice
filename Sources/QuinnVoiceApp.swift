@@ -270,6 +270,11 @@ final class SessionController {
         let bridge = OpenClawBridge(baseURL: URL(string: config.openclawUrl)!)
         self.toolProxy = GeminiToolProxy(bridge: bridge)
         self.contextLoader = ContextLoader(bridge: bridge, includeScreenContext: config.includeScreenContext)
+
+        // Set context priority from config
+        Task {
+            await contextLoader.setContextPriority(config.contextPriority)
+        }
     }
 
     func start() async {

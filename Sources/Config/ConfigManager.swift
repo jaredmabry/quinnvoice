@@ -80,6 +80,32 @@ enum SoulSource: String, Codable, Sendable {
     case custom
 }
 
+/// Priority for resolving soul/memory when both OpenClaw and app files exist.
+enum ContextPriority: String, Codable, Sendable, CaseIterable {
+    /// Always use QuinnVoice's soul + memory (ignores OpenClaw).
+    case appOnly = "app_only"
+    /// Use OpenClaw if running, fall back to app files.
+    case openclawFirst = "openclaw_first"
+    /// Combine both: OpenClaw context + app personality as base layer.
+    case merged = "merged"
+
+    var displayName: String {
+        switch self {
+        case .appOnly: return "App Only"
+        case .openclawFirst: return "OpenClaw First"
+        case .merged: return "Merged"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .appOnly: return "Always use QuinnVoice's soul and memory, even if OpenClaw is running"
+        case .openclawFirst: return "Use OpenClaw's personality if available, fall back to app files"
+        case .merged: return "Combine OpenClaw context with app personality as a base layer"
+        }
+    }
+}
+
 // MARK: - App Configuration
 
 /// Persistent configuration stored in ~/Library/Application Support/QuinnVoice/config.json.
@@ -147,6 +173,9 @@ struct AppConfig: Codable, Sendable {
     /// Filename of imported soul file (when soulSource == .file).
     var soulFileName: String
 
+    /// Priority for resolving soul/memory when OpenClaw is also available.
+    var contextPriority: ContextPriority
+
     // MARK: - Update Configuration
 
     /// Whether to automatically check for updates on launch.
@@ -188,7 +217,7 @@ struct AppConfig: Codable, Sendable {
         case wakeWordEnabled, wakePhrase, notificationsEnabled
         case preferredModel, contextCachingEnabled
         case agentModeEnabled, agentMaxIterations, agentConfirmDestructive, agentAllowedApps
-        case soulSource, soulText, soulFileName
+        case soulSource, soulText, soulFileName, contextPriority
         case autoCheckUpdates, lastUpdateCheck
         case theme, accentColor, waveformStyle, panelOpacity, reduceAnimations
         case audioProcessing
@@ -221,6 +250,7 @@ struct AppConfig: Codable, Sendable {
          soulSource: SoulSource = .custom,
          soulText: String = "",
          soulFileName: String = "",
+         contextPriority: ContextPriority = .openclawFirst,
          autoCheckUpdates: Bool = true,
          lastUpdateCheck: Date? = nil,
          theme: AppTheme = .system,
@@ -253,6 +283,7 @@ struct AppConfig: Codable, Sendable {
         self.soulSource = soulSource
         self.soulText = soulText
         self.soulFileName = soulFileName
+        self.contextPriority = contextPriority
         self.autoCheckUpdates = autoCheckUpdates
         self.lastUpdateCheck = lastUpdateCheck
         self.theme = theme
@@ -289,6 +320,7 @@ struct AppConfig: Codable, Sendable {
         self.soulSource = try container.decodeIfPresent(SoulSource.self, forKey: .soulSource) ?? .custom
         self.soulText = try container.decodeIfPresent(String.self, forKey: .soulText) ?? ""
         self.soulFileName = try container.decodeIfPresent(String.self, forKey: .soulFileName) ?? ""
+        self.contextPriority = try container.decodeIfPresent(ContextPriority.self, forKey: .contextPriority) ?? .openclawFirst
         self.autoCheckUpdates = try container.decodeIfPresent(Bool.self, forKey: .autoCheckUpdates) ?? true
         self.lastUpdateCheck = try container.decodeIfPresent(Date.self, forKey: .lastUpdateCheck)
         self.theme = try container.decodeIfPresent(AppTheme.self, forKey: .theme) ?? .system

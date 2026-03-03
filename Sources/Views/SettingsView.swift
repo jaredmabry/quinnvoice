@@ -383,6 +383,19 @@ struct PersonalityTab: View {
 
     var body: some View {
         Form {
+            Section {
+                Picker("When OpenClaw is available", selection: $configManager.config.contextPriority) {
+                    ForEach(ContextPriority.allCases, id: \.self) { priority in
+                        Text(priority.displayName).tag(priority)
+                    }
+                }
+                Text(configManager.config.contextPriority.description)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Context Priority")
+            }
+
             Section("Soul Source") {
                 Picker("Mode", selection: $configManager.config.soulSource) {
                     Text("Write Custom").tag(SoulSource.custom)
