@@ -11,15 +11,13 @@ let package = Package(
         .executable(name: "QuinnVoice", targets: ["QuinnVoice"])
     ],
     dependencies: [
-        .package(url: "https://github.com/paradigms-of-intelligence/swift-gemini-api", branch: "main"),
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0")
+        .package(url: "https://github.com/paradigms-of-intelligence/swift-gemini-api", branch: "main")
     ],
     targets: [
         .executableTarget(
             name: "QuinnVoice",
             dependencies: [
-                .product(name: "swift-gemini-api", package: "swift-gemini-api"),
-                .product(name: "Sparkle", package: "Sparkle")
+                .product(name: "swift-gemini-api", package: "swift-gemini-api")
             ],
             path: "Sources",
             swiftSettings: [

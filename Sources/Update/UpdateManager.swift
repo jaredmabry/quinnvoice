@@ -1,11 +1,10 @@
 import Foundation
-import Sparkle
+import AppKit
 
-/// Manages application auto-updates using the Sparkle framework.
+/// Manages application auto-updates by checking GitHub Releases.
 ///
-/// Wraps `SPUStandardUpdaterController` and provides observable state for the settings UI.
-/// The appcast URL is configured via the `SUFeedURL` Info.plist key or defaults to the
-/// GitHub releases atom feed.
+/// Checks the GitHub API for the latest release and compares version numbers.
+/// Downloads are handled by opening the release page in the browser.
 @Observable
 @MainActor
 final class UpdateManager {
@@ -28,123 +27,134 @@ final class UpdateManager {
     /// The latest version available, if known.
     var latestVersion: String?
 
-    /// Whether Sparkle is currently checking for updates.
+    /// URL to the latest release page.
+    var latestReleaseURL: URL?
+
+    /// URL to the DMG download.
+    var latestDownloadURL: URL?
+
+    /// Whether currently checking for updates.
     var isChecking: Bool = false
 
     /// The last time an update check was performed.
     var lastCheckDate: Date?
 
+    /// Whether the user can check for updates.
+    var canCheckForUpdates: Bool { !isChecking }
+
+    /// Whether automatic update checks are enabled.
+    var automaticallyChecksForUpdates: Bool = true
+
     // MARK: - Private
 
-    /// The Sparkle updater controller, initialized lazily.
-    private var updaterController: SPUStandardUpdaterController?
-
-    /// The updater delegate that receives Sparkle callbacks.
-    private let updaterDelegate = UpdateManagerDelegate()
-
-    // MARK: - Init
-
-    init() {
-        setupSparkle()
-    }
-
-    // MARK: - Setup
-
-    /// Initialize the Sparkle updater controller.
-    ///
-    /// Sparkle reads the `SUFeedURL` key from Info.plist to determine where to look for updates.
-    /// If running as a debug build without a proper bundle, Sparkle initialization may fail silently.
-    private func setupSparkle() {
-        // Guard: Sparkle requires a proper app bundle with Info.plist containing SUFeedURL.
-        // If running as a bare CLI binary (e.g., during testing), skip initialization.
-        guard Bundle.main.bundleIdentifier != nil,
-              Bundle.main.infoDictionary?["SUFeedURL"] != nil else {
-            print("[UpdateManager] Not in an app bundle with SUFeedURL — Sparkle disabled")
-            return
-        }
-
-        // Create the updater controller — Sparkle handles all UI and download logic
-        let controller = SPUStandardUpdaterController(
-            startingUpdater: false,
-            updaterDelegate: updaterDelegate,
-            userDriverDelegate: nil
-        )
-        self.updaterController = controller
-
-        // Wire delegate callbacks back to this manager
-        updaterDelegate.onUpdateFound = { [weak self] version in
-            guard let self else { return }
-            self.updateAvailable = true
-            self.latestVersion = version
-        }
-
-        updaterDelegate.onCheckComplete = { [weak self] in
-            guard let self else { return }
-            self.isChecking = false
-            self.lastCheckDate = Date()
-        }
-    }
+    private let repoOwner = "jaredmabry"
+    private let repoName = "quinnvoice"
 
     // MARK: - Actions
 
-    /// Manually check for updates, showing UI to the user.
+    /// Check GitHub Releases for a newer version.
     func checkForUpdates() {
-        guard let controller = updaterController else { return }
+        guard !isChecking else { return }
         isChecking = true
-        controller.checkForUpdates(nil)
+
+        Task {
+            defer {
+                Task { @MainActor in
+                    self.isChecking = false
+                    self.lastCheckDate = Date()
+                }
+            }
+
+            do {
+                let url = URL(string: "https://api.github.com/repos/\(repoOwner)/\(repoName)/releases/latest")!
+                var request = URLRequest(url: url)
+                request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+                request.timeoutInterval = 15
+
+                let (data, response) = try await URLSession.shared.data(for: request)
+
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    print("[UpdateManager] GitHub API returned non-200")
+                    return
+                }
+
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let tagName = json["tag_name"] as? String,
+                      let htmlURL = json["html_url"] as? String else {
+                    print("[UpdateManager] Failed to parse release JSON")
+                    return
+                }
+
+                // Extract version from tag (strip leading 'v')
+                let remoteVersion = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
+
+                // Find DMG asset
+                var dmgURL: URL?
+                if let assets = json["assets"] as? [[String: Any]] {
+                    for asset in assets {
+                        if let name = asset["name"] as? String,
+                           name.hasSuffix(".dmg"),
+                           let downloadURL = asset["browser_download_url"] as? String {
+                            dmgURL = URL(string: downloadURL)
+                            break
+                        }
+                    }
+                }
+
+                await MainActor.run {
+                    self.latestVersion = remoteVersion
+                    self.latestReleaseURL = URL(string: htmlURL)
+                    self.latestDownloadURL = dmgURL
+
+                    if isNewerVersion(remoteVersion, than: self.currentVersion) {
+                        self.updateAvailable = true
+                    } else {
+                        self.updateAvailable = false
+                    }
+                }
+            } catch {
+                print("[UpdateManager] Update check failed: \(error)")
+            }
+        }
     }
 
-    /// Silently check for updates in the background without showing UI.
+    /// Check for updates silently in the background.
     func checkForUpdatesInBackground() {
-        guard let updater = updaterController?.updater else { return }
-        isChecking = true
-        updater.checkForUpdatesInBackground()
+        checkForUpdates()
     }
 
-    /// Whether automatic update checks are enabled in Sparkle.
-    var automaticallyChecksForUpdates: Bool {
-        get { updaterController?.updater.automaticallyChecksForUpdates ?? true }
-        set { updaterController?.updater.automaticallyChecksForUpdates = newValue }
+    /// Open the latest release page or download URL in the browser.
+    func downloadUpdate() {
+        if let url = latestDownloadURL ?? latestReleaseURL {
+            NSWorkspace.shared.open(url)
+        }
     }
 
-    /// Start the Sparkle updater (call once during app launch).
+    /// Start checking for updates on app launch (if automatic checks are enabled).
     func startUpdater() {
-        try? updaterController?.updater.start()
-    }
-
-    /// Whether the updater can currently check for updates.
-    var canCheckForUpdates: Bool {
-        updaterController?.updater.canCheckForUpdates ?? false
-    }
-}
-
-// MARK: - Sparkle Delegate
-
-/// Delegate that receives callbacks from the Sparkle updater.
-final class UpdateManagerDelegate: NSObject, SPUUpdaterDelegate, @unchecked Sendable {
-
-    /// Called when an update is found.
-    var onUpdateFound: ((String) -> Void)?
-
-    /// Called when the update check completes.
-    var onCheckComplete: (() -> Void)?
-
-    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
-        let version = item.displayVersionString
-        Task { @MainActor in
-            onUpdateFound?(version)
+        if automaticallyChecksForUpdates {
+            // Delay initial check by 30 seconds to not slow down launch
+            Task {
+                try? await Task.sleep(for: .seconds(30))
+                checkForUpdatesInBackground()
+            }
         }
     }
 
-    func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: any Error) {
-        Task { @MainActor in
-            onCheckComplete?()
-        }
-    }
+    // MARK: - Version Comparison
 
-    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
-        Task { @MainActor in
-            onCheckComplete?()
+    /// Compare semantic versions. Returns true if `remote` is newer than `local`.
+    private func isNewerVersion(_ remote: String, than local: String) -> Bool {
+        let remoteParts = remote.split(separator: ".").compactMap { Int($0) }
+        let localParts = local.split(separator: ".").compactMap { Int($0) }
+
+        for i in 0..<max(remoteParts.count, localParts.count) {
+            let r = i < remoteParts.count ? remoteParts[i] : 0
+            let l = i < localParts.count ? localParts[i] : 0
+            if r > l { return true }
+            if r < l { return false }
         }
+        return false
     }
 }

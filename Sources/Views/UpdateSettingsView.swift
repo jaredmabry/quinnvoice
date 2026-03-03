@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// Settings view for managing application updates via Sparkle.
-///
-/// Shows current version info, update check controls, and automatic update preferences.
+/// Settings view for managing application updates via GitHub Releases.
 struct UpdateSettingsView: View {
     @Bindable var updateManager: UpdateManager
     @Bindable var configManager: ConfigManager
@@ -31,10 +29,10 @@ struct UpdateSettingsView: View {
                             Image(systemName: "arrow.down.circle.fill")
                                 .foregroundStyle(.green)
                         }
-                    } else {
-                        Text("Up to date")
+                    } else if updateManager.lastCheckDate != nil {
+                        Text("Up to date ✓")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.green)
                     }
                 }
             }
@@ -54,7 +52,7 @@ struct UpdateSettingsView: View {
                         }
                     }
                 }
-                .disabled(updateManager.isChecking || !updateManager.canCheckForUpdates)
+                .disabled(updateManager.isChecking)
 
                 if let lastCheck = updateManager.lastCheckDate ?? configManager.config.lastUpdateCheck {
                     HStack {
@@ -78,7 +76,7 @@ struct UpdateSettingsView: View {
             } header: {
                 Text("Preferences")
             } footer: {
-                Text("When enabled, QuinnVoice will periodically check for updates in the background and notify you when a new version is available.")
+                Text("When enabled, QuinnVoice checks GitHub Releases for new versions on launch.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -90,17 +88,26 @@ struct UpdateSettingsView: View {
                             Text("QuinnVoice \(latest)")
                                 .font(.body)
                                 .fontWeight(.medium)
-                            Text("Ready to download and install")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            if updateManager.latestDownloadURL != nil {
+                                Text("DMG ready to download")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("View release on GitHub")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
 
                         Spacer()
 
                         Button {
-                            updateManager.checkForUpdates()
+                            updateManager.downloadUpdate()
                         } label: {
-                            Label("Download & Install", systemImage: "arrow.down.circle.fill")
+                            Label(
+                                updateManager.latestDownloadURL != nil ? "Download" : "View Release",
+                                systemImage: "arrow.down.circle.fill"
+                            )
                         }
                         .buttonStyle(.borderedProminent)
                     }
