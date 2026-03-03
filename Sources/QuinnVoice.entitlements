@@ -18,5 +18,7 @@
     <true/>
     <key>com.apple.security.screen-capture.allow</key>
     <true/>
+    <key>com.apple.security.temporary-exception.accessibility</key>
+    <true/>
 </dict>
 </plist>

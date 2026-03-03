@@ -43,6 +43,29 @@ final class AppState {
     /// Whether the screen is currently being shared with Gemini.
     var isSharingScreen: Bool = false
 
+    // MARK: - Agent Mode State
+
+    /// Whether Quinn is currently in autonomous agent/computer-use mode.
+    var isAgentMode: Bool = false
+
+    /// The current task the agent is working on.
+    var agentTask: String?
+
+    /// Current step number in the agent loop (1-based).
+    var agentIteration: Int = 0
+
+    /// Maximum steps the agent will take before stopping.
+    var agentMaxIterations: Int = 20
+
+    /// Full action log for the current agent session.
+    var agentLog: [AgentLogEntry] = []
+
+    /// Action currently awaiting user confirmation (destructive command, etc.).
+    var agentPendingConfirmation: AgentAction?
+
+    /// Human-readable status text for the current agent activity.
+    var agentStatus: String?
+
     func transition(to newState: VoiceState) {
         voiceState = newState
     }
@@ -61,6 +84,34 @@ final class AppState {
 
     func clearError() {
         errorMessage = nil
+    }
+
+    // MARK: - Agent Mode Methods
+
+    /// Enter agent mode with a task.
+    func startAgentMode(task: String, maxIterations: Int) {
+        isAgentMode = true
+        agentTask = task
+        agentIteration = 0
+        agentMaxIterations = maxIterations
+        agentLog = []
+        agentPendingConfirmation = nil
+        agentStatus = "Starting…"
+    }
+
+    /// Exit agent mode and reset all agent state.
+    func stopAgentMode() {
+        isAgentMode = false
+        agentTask = nil
+        agentIteration = 0
+        agentLog = []
+        agentPendingConfirmation = nil
+        agentStatus = nil
+    }
+
+    /// Add an entry to the agent action log.
+    func appendAgentLog(_ entry: AgentLogEntry) {
+        agentLog.append(entry)
     }
 }
 

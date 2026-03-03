@@ -190,6 +190,11 @@ final class SessionController {
     private let clipboardManager: ClipboardManager?
     private let notificationManager: NotificationManager?
 
+    // MARK: - Agent / Computer Use
+    private let computerController = ComputerController()
+    private var agentLoop: AgentLoop?
+    private let agentOverlayController = AgentOverlayWindowController()
+
     init(appState: AppState, config: AppConfig, clipboardManager: ClipboardManager? = nil, notificationManager: NotificationManager? = nil) {
         self.appState = appState
         self.config = config
@@ -207,13 +212,22 @@ final class SessionController {
         appState.transition(to: .listening)
         appState.isSessionActive = true
 
-        // Configure tool proxy with clipboard and notification managers
+        // Configure tool proxy with clipboard, notification, and computer-use managers
         await toolProxy.configure(
             clipboardManager: clipboardManager,
             notificationManager: notificationManager,
             clipboardEnabled: config.clipboardAccess,
             notificationsEnabled: config.notificationsEnabled
         )
+
+        // Configure computer use if enabled
+        if config.agentModeEnabled {
+            await toolProxy.configureComputerUse(
+                controller: computerController,
+                enabled: true
+            )
+            await computerController.setAllowedApps(config.agentAllowedApps)
+        }
 
         // Capture screen context if enabled
         var screenContext: String? = nil
@@ -374,8 +388,101 @@ final class SessionController {
 
     private func handleFunctionCall(name: String, id: String, arguments: [String: String]) {
         Task {
+            // Handle task_complete — ends agent mode
+            if name == "task_complete" {
+                let summary = arguments["summary"] ?? "Task completed"
+                await stopAgentMode()
+                try? await geminiSession?.sendFunctionResponse(callId: id, name: name, response: "Task complete: \(summary)")
+                return
+            }
+
             let result = await toolProxy.execute(functionName: name, arguments: arguments)
             try? await geminiSession?.sendFunctionResponse(callId: id, name: name, response: result)
+        }
+    }
+
+    // MARK: - Agent Mode
+
+    /// Start the autonomous agent loop for a given task.
+    func startAgentMode(task: String) async {
+        guard config.agentModeEnabled else { return }
+
+        appState.startAgentMode(task: task, maxIterations: config.agentMaxIterations)
+
+        let loop = AgentLoop(
+            task: task,
+            computerController: computerController,
+            toolProxy: toolProxy,
+            maxIterations: config.agentMaxIterations,
+            confirmDestructive: config.agentConfirmDestructive,
+            stateUpdater: { [weak self] update in
+                Task { @MainActor [weak self] in
+                    self?.handleAgentStateUpdate(update)
+                }
+            }
+        )
+        self.agentLoop = loop
+
+        // Show overlay
+        agentOverlayController.show(
+            appState: appState,
+            onStop: { [weak self] in
+                Task { await self?.stopAgentMode() }
+            },
+            onConfirm: { [weak self] allowed in
+                Task {
+                    await self?.agentLoop?.respondToConfirmation(allowed: allowed)
+                }
+            }
+        )
+
+        // Start the loop
+        Task {
+            await loop.start()
+        }
+    }
+
+    /// Stop the agent loop and clean up.
+    func stopAgentMode() async {
+        await agentLoop?.stop()
+        agentLoop = nil
+        appState.stopAgentMode()
+        agentOverlayController.hide()
+    }
+
+    /// Handle state updates from the agent loop.
+    private func handleAgentStateUpdate(_ update: AgentLoop.AgentStateUpdate) {
+        switch update {
+        case .started(let task, let maxIter):
+            appState.agentTask = task
+            appState.agentMaxIterations = maxIter
+
+        case .iterationChanged(let iteration):
+            appState.agentIteration = iteration
+
+        case .statusChanged(let status):
+            appState.agentStatus = status.displayText
+
+        case .logEntry(let entry):
+            appState.appendAgentLog(entry)
+
+        case .pendingConfirmation(let action):
+            appState.agentPendingConfirmation = action
+
+        case .confirmationCleared:
+            appState.agentPendingConfirmation = nil
+
+        case .completed(let summary):
+            appState.agentStatus = "✅ \(summary)"
+            Task { await stopAgentMode() }
+
+        case .error(let message):
+            appState.agentStatus = "❌ \(message)"
+
+        case .stopped:
+            if appState.isAgentMode {
+                Task { await stopAgentMode() }
+            }
         }
     }
 }
@@ -402,5 +509,11 @@ extension GeminiToolProxy {
         self.notificationManager = notificationManager
         self.clipboardEnabled = clipboardEnabled
         self.notificationsEnabled = notificationsEnabled
+    }
+
+    /// Configure the tool proxy for computer use / agent mode.
+    func configureComputerUse(controller: ComputerController, enabled: Bool) {
+        self.computerController = controller
+        self.computerUseEnabled = enabled
     }
 }

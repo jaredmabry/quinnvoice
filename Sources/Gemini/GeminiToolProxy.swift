@@ -13,11 +13,17 @@ actor GeminiToolProxy {
     /// Reference to the notification manager for surfacing important results.
     var notificationManager: NotificationManager?
 
+    /// Reference to the computer controller for agent/computer-use tools.
+    var computerController: ComputerController?
+
     /// Whether clipboard tools are available.
     var clipboardEnabled: Bool = false
 
     /// Whether notifications are enabled for tool results.
     var notificationsEnabled: Bool = false
+
+    /// Whether computer-use/agent tools are available.
+    var computerUseEnabled: Bool = false
 
     init(bridge: OpenClawBridge) {
         self.bridge = bridge
@@ -361,6 +367,108 @@ actor GeminiToolProxy {
                 ],
                 "required": ["text"]
             ]
+        ],
+
+        // MARK: Computer Use / Agent Mode
+        [
+            "name": "type_text",
+            "description": "Type text into the currently focused application. Use for entering text, code, commands, etc.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "text": ["type": "string", "description": "The text to type"]
+                ],
+                "required": ["text"]
+            ]
+        ],
+        [
+            "name": "press_keys",
+            "description": "Press a key combination. Supports modifiers: command, option, shift, control. Examples: Cmd+S to save, Cmd+Z to undo, Return to execute.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "modifiers": ["type": "string", "description": "Comma-separated modifier keys: command, option, shift, control. Leave empty for no modifiers."],
+                    "key": ["type": "string", "description": "The key to press: a-z, 0-9, return, tab, escape, space, delete, up, down, left, right, f1-f12"]
+                ],
+                "required": ["key"]
+            ]
+        ],
+        [
+            "name": "click_at",
+            "description": "Click at specific screen coordinates. Use after reading screen content or taking a screenshot to know where UI elements are.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "x": ["type": "string", "description": "Horizontal screen coordinate"],
+                    "y": ["type": "string", "description": "Vertical screen coordinate"],
+                    "button": ["type": "string", "description": "Mouse button: 'left' (default), 'right', or 'middle'"],
+                    "clicks": ["type": "string", "description": "Number of clicks: '1' (single, default) or '2' (double)"]
+                ],
+                "required": ["x", "y"]
+            ]
+        ],
+        [
+            "name": "scroll",
+            "description": "Scroll up or down in the currently focused window.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "direction": ["type": "string", "description": "'up' or 'down'"],
+                    "amount": ["type": "string", "description": "Number of scroll units (default: '3')"]
+                ],
+                "required": ["direction"]
+            ]
+        ],
+        [
+            "name": "read_screen",
+            "description": "Read the text content of the currently focused window. Returns the app name, window title, focused element, and visible text content.",
+            "parameters": [
+                "type": "object",
+                "properties": [:] as [String: Any],
+                "required": [] as [String]
+            ]
+        ],
+        [
+            "name": "focus_app",
+            "description": "Bring a specific application to the foreground. Use before interacting with a particular app.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "app_name": ["type": "string", "description": "Application name, e.g. 'Terminal', 'Safari', 'Xcode', 'Visual Studio Code'"]
+                ],
+                "required": ["app_name"]
+            ]
+        ],
+        [
+            "name": "take_screenshot",
+            "description": "Capture a screenshot of the currently focused window. Returns the image data for visual analysis.",
+            "parameters": [
+                "type": "object",
+                "properties": [:] as [String: Any],
+                "required": [] as [String]
+            ]
+        ],
+        [
+            "name": "task_complete",
+            "description": "Signal that the autonomous task is finished. Call this when the requested task has been completed successfully.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "summary": ["type": "string", "description": "A brief summary of what was accomplished"]
+                ],
+                "required": ["summary"]
+            ]
+        ],
+        [
+            "name": "ask_user",
+            "description": "Ask the user a question mid-task and wait for their response. Use when you need clarification or a decision from the user.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "question": ["type": "string", "description": "The question to ask the user"]
+                ],
+                "required": ["question"]
+            ]
         ]
     ]
 
@@ -368,7 +476,8 @@ actor GeminiToolProxy {
     static let confirmationRequired: Set<String> = [
         "send_message", "send_email", "create_calendar_event",
         "control_locks", "control_garage", "arm_security",
-        "write_file", "run_command"
+        "write_file", "run_command",
+        "click_at", "type_text"
     ]
 
     /// Execute a function call from Gemini by proxying to OpenClaw or handling locally.
@@ -399,6 +508,109 @@ actor GeminiToolProxy {
             } else {
                 result = "Clipboard access is not enabled."
             }
+
+        // MARK: Computer Use Tools
+        case "type_text":
+            guard computerUseEnabled, let controller = computerController else {
+                result = "Computer use is not enabled."
+                break
+            }
+            let text = arguments["text"] ?? ""
+            do {
+                try await controller.typeText(text)
+                result = "Typed \(text.count) characters"
+            } catch {
+                result = "Error typing text: \(error.localizedDescription)"
+            }
+
+        case "press_keys":
+            guard computerUseEnabled, let controller = computerController else {
+                result = "Computer use is not enabled."
+                break
+            }
+            let modifiersStr = arguments["modifiers"] ?? ""
+            let modifiers = modifiersStr.isEmpty ? [] : modifiersStr.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            let key = arguments["key"] ?? "return"
+            do {
+                try await controller.pressKeys(modifiers: modifiers, key: key)
+                result = "Pressed \((modifiers + [key]).joined(separator: "+"))"
+            } catch {
+                result = "Error pressing keys: \(error.localizedDescription)"
+            }
+
+        case "click_at":
+            guard computerUseEnabled, let controller = computerController else {
+                result = "Computer use is not enabled."
+                break
+            }
+            let x = Double(arguments["x"] ?? "0") ?? 0
+            let y = Double(arguments["y"] ?? "0") ?? 0
+            let button = arguments["button"] ?? "left"
+            let clicks = Int(arguments["clicks"] ?? "1") ?? 1
+            do {
+                try await controller.click(x: x, y: y, button: button, clicks: clicks)
+                result = "Clicked at (\(Int(x)), \(Int(y)))"
+            } catch {
+                result = "Error clicking: \(error.localizedDescription)"
+            }
+
+        case "scroll":
+            guard computerUseEnabled, let controller = computerController else {
+                result = "Computer use is not enabled."
+                break
+            }
+            let direction = arguments["direction"] ?? "down"
+            let amount = Int(arguments["amount"] ?? "3") ?? 3
+            do {
+                try await controller.scroll(direction: direction, amount: amount)
+                result = "Scrolled \(direction) \(amount) units"
+            } catch {
+                result = "Error scrolling: \(error.localizedDescription)"
+            }
+
+        case "read_screen":
+            guard computerUseEnabled, let controller = computerController else {
+                result = "Computer use is not enabled."
+                break
+            }
+            do {
+                result = try await controller.readScreenContent()
+            } catch {
+                result = "Error reading screen: \(error.localizedDescription)"
+            }
+
+        case "focus_app":
+            guard computerUseEnabled, let controller = computerController else {
+                result = "Computer use is not enabled."
+                break
+            }
+            let appName = arguments["app_name"] ?? ""
+            do {
+                try await controller.focusApp(appName)
+                result = "Focused \(appName)"
+            } catch {
+                result = "Error focusing app: \(error.localizedDescription)"
+            }
+
+        case "take_screenshot":
+            guard computerUseEnabled, let controller = computerController else {
+                result = "Computer use is not enabled."
+                break
+            }
+            do {
+                let data = try await controller.takeScreenshot()
+                result = "Screenshot captured (\(data.count) bytes). Image sent to Gemini for analysis."
+            } catch {
+                result = "Error taking screenshot: \(error.localizedDescription)"
+            }
+
+        case "task_complete":
+            let summary = arguments["summary"] ?? "Task completed"
+            result = "Task complete: \(summary)"
+
+        case "ask_user":
+            let question = arguments["question"] ?? "What would you like me to do?"
+            result = "Asked user: \(question). Awaiting response."
 
         default:
             // Proxy to OpenClaw

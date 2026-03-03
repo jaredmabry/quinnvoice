@@ -4,6 +4,10 @@ import Foundation
 ///
 /// Optionally includes live screen context (frontmost app, window title, selected text)
 /// when ``includeScreenContext`` is enabled.
+///
+/// When a ``GeminiClient`` is provided and context caching is enabled, MEMORY.md content
+/// exceeding 2000 tokens (~8000 characters) is automatically summarized using Flash
+/// to reduce costs.
 actor ContextLoader {
     private let bridge: OpenClawBridge
     private let workspacePath: String
@@ -11,6 +15,15 @@ actor ContextLoader {
 
     /// Whether to include screen context in system instructions.
     var includeScreenContext: Bool
+
+    /// Optional GeminiClient for context summarization.
+    var geminiClient: GeminiClient?
+
+    /// Whether context summarization is enabled.
+    var contextSummarizationEnabled: Bool = true
+
+    /// Approximate character threshold for MEMORY.md summarization (~2000 tokens).
+    private let memorySummarizationThreshold = 8000
 
     init(bridge: OpenClawBridge, workspacePath: String = "/Users/jaredmabry/.openclaw/workspace", includeScreenContext: Bool = false) {
         self.bridge = bridge
@@ -47,9 +60,10 @@ actor ContextLoader {
             parts.append("## About the User\n\(user)")
         }
 
-        // Load MEMORY.md
+        // Load MEMORY.md (summarize if too long)
         if let memory = await loadFile("MEMORY.md") {
-            parts.append("## Memory\n\(memory)")
+            let memoryContent = await compressIfNeeded(memory, label: "MEMORY.md")
+            parts.append("## Memory\n\(memoryContent)")
         }
 
         // Include screen context if provided
@@ -80,6 +94,27 @@ actor ContextLoader {
         } catch {
             print("[ContextLoader] Could not load \(name): \(error)")
             return nil
+        }
+    }
+
+    /// Compress context text using GeminiClient (Flash) if it exceeds the threshold.
+    ///
+    /// Falls back to simple truncation if summarization fails.
+    private func compressIfNeeded(_ text: String, label: String) async -> String {
+        guard contextSummarizationEnabled,
+              text.count > memorySummarizationThreshold,
+              let client = geminiClient else {
+            return text
+        }
+
+        do {
+            let summary = try await client.summarize(text: text, maxTokens: 500)
+            print("[ContextLoader] Summarized \(label): \(text.count) → \(summary.count) chars")
+            return summary
+        } catch {
+            print("[ContextLoader] Summarization failed for \(label), using truncated version: \(error)")
+            // Fallback: truncate to threshold
+            return String(text.prefix(memorySummarizationThreshold)) + "\n[…truncated]"
         }
     }
 }

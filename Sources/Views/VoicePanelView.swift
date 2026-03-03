@@ -133,6 +133,28 @@ struct VoicePanelView: View {
                     }
                 }
 
+                // Agent mode indicator
+                if appState.isAgentMode {
+                    HStack(spacing: 6) {
+                        Image(systemName: "cpu")
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                        Text("Agent Mode")
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .foregroundStyle(.red)
+                        Spacer()
+                        Text("Step \(appState.agentIteration)/\(appState.agentMaxIterations)")
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.red.opacity(0.1))
+                    .clipShape(Capsule())
+                }
+
                 // Wake word indicator
                 if appState.isWakeWordListening {
                     HStack(spacing: 4) {

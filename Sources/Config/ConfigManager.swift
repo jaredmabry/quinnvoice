@@ -121,6 +121,28 @@ struct AppConfig: Codable, Sendable {
     /// Whether to surface tool results as macOS notifications.
     var notificationsEnabled: Bool
 
+    // MARK: - AI Model Configuration
+
+    /// Preferred model selection: auto, flash, or pro.
+    var preferredModel: ModelPreference
+
+    /// Whether to use context caching for system prompts.
+    var contextCachingEnabled: Bool
+
+    // MARK: - Agent / Computer Use Configuration
+
+    /// Whether the autonomous agent mode is enabled.
+    var agentModeEnabled: Bool
+
+    /// Maximum number of observe-act iterations before the agent stops.
+    var agentMaxIterations: Int
+
+    /// Whether to pause and confirm before executing destructive commands.
+    var agentConfirmDestructive: Bool
+
+    /// Applications the agent is allowed to interact with.
+    var agentAllowedApps: [String]
+
     /// Whether the API key has been configured
     var isConfigured: Bool { !geminiApiKey.isEmpty }
 
@@ -129,6 +151,8 @@ struct AppConfig: Codable, Sendable {
         case geminiModel, openclawUrl, voiceConfig, continuousMode, showTranscript
         case hotkeyEnabled, hotkeyMode, includeScreenContext, clipboardAccess
         case wakeWordEnabled, wakePhrase, notificationsEnabled
+        case preferredModel, contextCachingEnabled
+        case agentModeEnabled, agentMaxIterations, agentConfirmDestructive, agentAllowedApps
     }
 
     init(geminiApiKey: String = "",
@@ -143,7 +167,13 @@ struct AppConfig: Codable, Sendable {
          clipboardAccess: Bool = true,
          wakeWordEnabled: Bool = false,
          wakePhrase: String = "Hey Quinn",
-         notificationsEnabled: Bool = true) {
+         notificationsEnabled: Bool = true,
+         preferredModel: ModelPreference = .auto,
+         contextCachingEnabled: Bool = true,
+         agentModeEnabled: Bool = true,
+         agentMaxIterations: Int = 20,
+         agentConfirmDestructive: Bool = true,
+         agentAllowedApps: [String] = ["Terminal", "iTerm2", "Xcode", "Visual Studio Code", "Safari", "Finder"]) {
         self.geminiApiKey = geminiApiKey
         self.geminiModel = geminiModel
         self.openclawUrl = openclawUrl
@@ -157,6 +187,12 @@ struct AppConfig: Codable, Sendable {
         self.wakeWordEnabled = wakeWordEnabled
         self.wakePhrase = wakePhrase
         self.notificationsEnabled = notificationsEnabled
+        self.preferredModel = preferredModel
+        self.contextCachingEnabled = contextCachingEnabled
+        self.agentModeEnabled = agentModeEnabled
+        self.agentMaxIterations = agentMaxIterations
+        self.agentConfirmDestructive = agentConfirmDestructive
+        self.agentAllowedApps = agentAllowedApps
     }
 
     init(from decoder: Decoder) throws {
@@ -174,6 +210,12 @@ struct AppConfig: Codable, Sendable {
         self.wakeWordEnabled = try container.decodeIfPresent(Bool.self, forKey: .wakeWordEnabled) ?? false
         self.wakePhrase = try container.decodeIfPresent(String.self, forKey: .wakePhrase) ?? "Hey Quinn"
         self.notificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? true
+        self.preferredModel = try container.decodeIfPresent(ModelPreference.self, forKey: .preferredModel) ?? .auto
+        self.contextCachingEnabled = try container.decodeIfPresent(Bool.self, forKey: .contextCachingEnabled) ?? true
+        self.agentModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .agentModeEnabled) ?? true
+        self.agentMaxIterations = try container.decodeIfPresent(Int.self, forKey: .agentMaxIterations) ?? 20
+        self.agentConfirmDestructive = try container.decodeIfPresent(Bool.self, forKey: .agentConfirmDestructive) ?? true
+        self.agentAllowedApps = try container.decodeIfPresent([String].self, forKey: .agentAllowedApps) ?? ["Terminal", "iTerm2", "Xcode", "Visual Studio Code", "Safari", "Finder"]
     }
 
     static let `default` = AppConfig()

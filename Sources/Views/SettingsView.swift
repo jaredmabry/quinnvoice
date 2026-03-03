@@ -52,6 +52,23 @@ struct SettingsView: View {
                         }
                     }
 
+                    // MARK: - AI Model
+                    Section {
+                        Picker("Model Preference", selection: $configManager.config.preferredModel) {
+                            ForEach(ModelPreference.allCases, id: \.self) { pref in
+                                Text(pref.displayName).tag(pref)
+                            }
+                        }
+
+                        Toggle("Context Caching", isOn: $configManager.config.contextCachingEnabled)
+                    } header: {
+                        Text("AI Model")
+                    } footer: {
+                        Text("Auto routes simple tasks to Flash (cheaper) and complex tasks to Pro (smarter). Context caching reduces cost for repeated system prompts.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
                     // MARK: - OpenClaw
                     Section("OpenClaw") {
                         TextField("Gateway URL", text: $configManager.config.openclawUrl)
@@ -166,6 +183,65 @@ struct SettingsView: View {
                         Text("Notifications")
                     } footer: {
                         Text("Surface important tool results (calendar conflicts, security alerts, reminders) as native macOS notifications.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    // MARK: - Agent / Computer Use
+                    Section {
+                        Toggle("Enable Agent Mode", isOn: $configManager.config.agentModeEnabled)
+
+                        if configManager.config.agentModeEnabled {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("Max Iterations")
+                                    Spacer()
+                                    Text("\(configManager.config.agentMaxIterations)")
+                                        .monospacedDigit()
+                                        .foregroundStyle(.secondary)
+                                }
+                                Slider(
+                                    value: Binding(
+                                        get: { Double(configManager.config.agentMaxIterations) },
+                                        set: { configManager.config.agentMaxIterations = Int($0) }
+                                    ),
+                                    in: 5...50,
+                                    step: 1
+                                )
+                            }
+
+                            Toggle("Confirm Destructive Commands", isOn: $configManager.config.agentConfirmDestructive)
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Allowed Apps")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(configManager.config.agentAllowedApps.joined(separator: ", "))
+                                    .font(.caption)
+                                    .foregroundStyle(.primary)
+                            }
+
+                            // Accessibility permission status for agent mode
+                            HStack {
+                                Image(systemName: accessibilityGranted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                    .foregroundStyle(accessibilityGranted ? .green : .orange)
+                                Text(accessibilityGranted ? "Accessibility granted" : "Accessibility required for computer use")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                if !accessibilityGranted {
+                                    Button("Request") {
+                                        _ = HotkeyManager.checkAccessibilityPermissions(prompt: true)
+                                        checkPermissions()
+                                    }
+                                    .font(.caption)
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("Agent / Computer Use")
+                    } footer: {
+                        Text("When enabled, Quinn can autonomously control your Mac: type, click, run commands, and navigate apps to complete tasks. Say \"take over\" or \"do it for me\" to activate. Always confirms destructive actions.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
