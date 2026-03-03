@@ -30,28 +30,31 @@ struct QuinnVoiceApp: App {
                         onToggleScreen: { toggleScreen() }
                     )
 
-                    // Quick action buttons
-                    HStack(spacing: 12) {
-                        Button {
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    // Menu actions
+                    VStack(spacing: 2) {
+                        MenuActionButton(label: "History", icon: "clock.arrow.trianglehead.counterclockwise.rotate.90", shortcut: "⌘H") {
                             openWindow(id: "conversation-history")
                             NSApp.activate(ignoringOtherApps: true)
-                        } label: {
-                            Label("History", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90")
-                                .font(.caption2)
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
 
-                        Button {
-                            updateManager.checkForUpdates()
-                        } label: {
-                            Label("Updates", systemImage: "arrow.triangle.2.circlepath")
-                                .font(.caption2)
+                        MenuActionButton(label: "Settings", icon: "gear", shortcut: "⌘,") {
+                            openSettings()
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
+
+                        MenuActionButton(label: "Check for Updates", icon: "arrow.triangle.2.circlepath") {
+                            updateManager.checkForUpdates()
+                        }
+
+                        Divider()
+                            .padding(.vertical, 4)
+
+                        MenuActionButton(label: "Quit QuinnVoice", icon: "power", shortcut: "⌘Q", isDestructive: true) {
+                            NSApplication.shared.terminate(nil)
+                        }
                     }
-                    .padding(.top, 4)
                     .padding(.bottom, 8)
                 }
             } else {
@@ -69,6 +72,17 @@ struct QuinnVoiceApp: App {
                         openSettings()
                     }
                     .buttonStyle(.borderedProminent)
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    Button(role: .destructive) {
+                        NSApplication.shared.terminate(nil)
+                    } label: {
+                        Label("Quit QuinnVoice", systemImage: "power")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(20)
                 .frame(width: 280)
@@ -615,5 +629,36 @@ extension GeminiToolProxy {
     func configureComputerUse(controller: ComputerController, enabled: Bool) {
         self.computerController = controller
         self.computerUseEnabled = enabled
+    }
+}
+
+// MARK: - Menu Action Button
+
+/// A styled button for the menu bar dropdown actions.
+struct MenuActionButton: View {
+    let label: String
+    let icon: String
+    var shortcut: String? = nil
+    var isDestructive: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Label(label, systemImage: icon)
+                    .font(.caption)
+                Spacer()
+                if let shortcut {
+                    Text(shortcut)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isDestructive ? .red : .primary)
     }
 }
