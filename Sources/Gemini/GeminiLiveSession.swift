@@ -241,8 +241,12 @@ actor GeminiLiveSession {
     private func handleTextMessage(_ text: String) {
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            print("[GeminiLive] Failed to parse message: \(text.prefix(200))")
             return
         }
+
+        let keys = Array(json.keys)
+        print("[GeminiLive] Received message keys: \(keys)")
 
         // Setup complete response
         if json["setupComplete"] != nil {

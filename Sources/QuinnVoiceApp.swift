@@ -474,13 +474,16 @@ final class SessionController {
     private func handleGeminiEvent(_ event: GeminiLiveSession.Event) {
         switch event {
         case .setupComplete:
+            print("[QuinnVoice] Gemini setup complete — now listening")
             appState.transition(to: .listening)
 
         case .audioData(let data):
+            print("[QuinnVoice] Received audio data: \(data.count) bytes")
             appState.transition(to: .speaking)
             audioManager.playAudioData(data)
 
         case .text(let text):
+            print("[QuinnVoice] Received text: \(text.prefix(100))")
             appState.addTranscriptLine(TranscriptLine(role: .assistant, text: text))
             // Record assistant text to conversation history
             if let sessionId = currentSessionId {
@@ -488,6 +491,7 @@ final class SessionController {
             }
 
         case .turnComplete:
+            print("[QuinnVoice] Turn complete")
             if config.continuousMode {
                 appState.transition(to: .listening)
             } else {
@@ -495,17 +499,21 @@ final class SessionController {
             }
 
         case .interrupted:
+            print("[QuinnVoice] Interrupted — stopping playback")
             audioManager.stopPlayback()
             appState.transition(to: .listening)
 
         case .functionCall(let name, let id, let args):
+            print("[QuinnVoice] Function call: \(name)")
             appState.transition(to: .thinking)
             handleFunctionCall(name: name, id: id, arguments: args)
 
         case .error(let message):
+            print("[QuinnVoice] ERROR: \(message)")
             appState.setError(message)
 
         case .disconnected:
+            print("[QuinnVoice] Disconnected")
             if appState.isSessionActive {
                 appState.setError("Disconnected from Gemini")
                 Task { await stop() }

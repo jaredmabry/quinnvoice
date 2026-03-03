@@ -27,6 +27,7 @@ final class AudioManager: Sendable {
         // Connect player node → main mixer at 24kHz float32 (Gemini output format)
         let playbackFormat = AudioBufferConverter.outputFloatFormat
         engine.connect(playerNode, to: engine.mainMixerNode, format: playbackFormat)
+        print("[AudioManager] Initialized — playerNode connected at \(playbackFormat)")
     }
 
     // MARK: - Mic Capture
@@ -36,19 +37,23 @@ final class AudioManager: Sendable {
 
         let inputNode = engine.inputNode
         let hardwareFormat = inputNode.outputFormat(forBus: 0)
+        print("[AudioManager] Hardware mic format: \(hardwareFormat)")
 
-        // We need 16kHz int16 mono for Gemini. Install a tap at the hardware format
-        // and convert in the callback.
-        let targetFormat = AudioBufferConverter.inputFormat
+        guard hardwareFormat.sampleRate > 0 else {
+            print("[AudioManager] ERROR: Hardware sample rate is 0 — no mic available")
+            throw AudioError.noMicrophone
+        }
 
-        // Create converter from hardware format to 16kHz int16 mono
-        // Use a float32 intermediate for the tap since taps prefer float
+        // Use float32 intermediate for the tap since taps prefer float
         let tapFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: hardwareFormat.sampleRate,
             channels: 1,
             interleaved: false
         )!
+
+        // We need 16kHz int16 mono for Gemini
+        let targetFormat = AudioBufferConverter.inputFormat
 
         inputNode.installTap(onBus: 0, bufferSize: 1600, format: tapFormat) { [weak self] buffer, _ in
             guard let self else { return }
@@ -68,15 +73,19 @@ final class AudioManager: Sendable {
             self.onMicData?(data)
         }
 
+        // Prepare and start the engine (needed for both capture and playback)
+        engine.prepare()
         try engine.start()
         isCapturing = true
+        print("[AudioManager] Capture started — engine running: \(engine.isRunning)")
     }
 
     func stopCapture() {
         guard isCapturing else { return }
         engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        // Don't stop the engine — playerNode may still need it for playback
         isCapturing = false
+        print("[AudioManager] Capture stopped (engine still running for playback)")
     }
 
     // MARK: - Playback
@@ -84,10 +93,13 @@ final class AudioManager: Sendable {
     /// Schedule raw 16-bit PCM audio data (24kHz mono) for playback.
     func playAudioData(_ data: Data) {
         guard let buffer = AudioBufferConverter.int16DataToPlaybackBuffer(data) else {
+            print("[AudioManager] WARNING: Failed to convert \(data.count) bytes to playback buffer")
             return
         }
 
         if !engine.isRunning {
+            print("[AudioManager] Engine not running for playback — starting")
+            engine.prepare()
             try? engine.start()
         }
 
@@ -95,6 +107,7 @@ final class AudioManager: Sendable {
 
         if !playerNode.isPlaying {
             playerNode.play()
+            print("[AudioManager] PlayerNode started — buffer frames: \(buffer.frameLength)")
         }
     }
 
@@ -106,6 +119,7 @@ final class AudioManager: Sendable {
     /// Restart the engine if needed (e.g. after route change).
     func ensureEngineRunning() {
         if !engine.isRunning {
+            engine.prepare()
             try? engine.start()
         }
     }
@@ -114,5 +128,18 @@ final class AudioManager: Sendable {
         stopPlayback()
         stopCapture()
         engine.stop()
+        print("[AudioManager] Teardown complete")
+    }
+
+    // MARK: - Errors
+
+    enum AudioError: LocalizedError {
+        case noMicrophone
+
+        var errorDescription: String? {
+            switch self {
+            case .noMicrophone: return "No microphone available"
+            }
+        }
     }
 }
