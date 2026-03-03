@@ -9,6 +9,7 @@ struct QuinnVoiceApp: App {
     @State private var wakeWordDetector = WakeWordDetector()
     @State private var notificationManager = NotificationManager()
     @State private var clipboardManager = ClipboardManager()
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         MenuBarExtra("QuinnVoice", systemImage: menuBarIcon) {
@@ -44,15 +45,9 @@ struct QuinnVoiceApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("Settings", id: "settings") {
+        Settings {
             SettingsView(configManager: configManager)
         }
-        .windowResizability(.contentSize)
-
-        Window("QuinnVoice Settings", id: "settings-window") {
-            SettingsView(configManager: configManager)
-        }
-        .windowResizability(.contentSize)
     }
 
     private var menuBarIcon: String {
@@ -67,11 +62,11 @@ struct QuinnVoiceApp: App {
         }
     }
 
+    @MainActor
     private func openSettings() {
         appState.showSettings = true
-        if let url = URL(string: "quinnvoice://settings") {
-            NSWorkspace.shared.open(url)
-        }
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 
     private func startSession() {
