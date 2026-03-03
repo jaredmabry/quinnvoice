@@ -3,59 +3,47 @@ import AppKit
 
 /// Manages application auto-updates by checking GitHub Releases.
 ///
-/// Checks the GitHub API for the latest release and compares version numbers.
-/// Downloads are handled by opening the release page in the browser.
+/// Checks the GitHub API for the latest release, downloads the DMG,
+/// mounts it, replaces the running app, and relaunches.
 @Observable
 @MainActor
 final class UpdateManager {
 
     // MARK: - Public State
 
-    /// Whether an update is available for download.
     var updateAvailable: Bool = false
+    var isChecking: Bool = false
+    var isDownloading: Bool = false
+    var isInstalling: Bool = false
+    var downloadProgress: Double = 0
+    var updateError: String?
+    var lastCheckDate: Date?
+    var latestVersion: String?
+    var latestReleaseURL: URL?
+    var latestDownloadURL: URL?
+    var automaticallyChecksForUpdates: Bool = true
 
-    /// The current app version from the main bundle.
     var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
     }
 
-    /// The current build number from the main bundle.
     var currentBuild: String {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
     }
 
-    /// The latest version available, if known.
-    var latestVersion: String?
-
-    /// URL to the latest release page.
-    var latestReleaseURL: URL?
-
-    /// URL to the DMG download.
-    var latestDownloadURL: URL?
-
-    /// Whether currently checking for updates.
-    var isChecking: Bool = false
-
-    /// The last time an update check was performed.
-    var lastCheckDate: Date?
-
-    /// Whether the user can check for updates.
-    var canCheckForUpdates: Bool { !isChecking }
-
-    /// Whether automatic update checks are enabled.
-    var automaticallyChecksForUpdates: Bool = true
+    var canCheckForUpdates: Bool { !isChecking && !isDownloading && !isInstalling }
 
     // MARK: - Private
 
     private let repoOwner = "jaredmabry"
     private let repoName = "quinnvoice"
 
-    // MARK: - Actions
+    // MARK: - Check for Updates
 
-    /// Check GitHub Releases for a newer version.
     func checkForUpdates() {
         guard !isChecking else { return }
         isChecking = true
+        updateError = nil
 
         Task {
             defer {
@@ -75,21 +63,19 @@ final class UpdateManager {
 
                 guard let httpResponse = response as? HTTPURLResponse,
                       httpResponse.statusCode == 200 else {
-                    print("[UpdateManager] GitHub API returned non-200")
+                    await MainActor.run { self.updateError = "GitHub API error" }
                     return
                 }
 
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let tagName = json["tag_name"] as? String,
                       let htmlURL = json["html_url"] as? String else {
-                    print("[UpdateManager] Failed to parse release JSON")
+                    await MainActor.run { self.updateError = "Failed to parse release" }
                     return
                 }
 
-                // Extract version from tag (strip leading 'v')
                 let remoteVersion = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
 
-                // Find DMG asset
                 var dmgURL: URL?
                 if let assets = json["assets"] as? [[String: Any]] {
                     for asset in assets {
@@ -106,35 +92,20 @@ final class UpdateManager {
                     self.latestVersion = remoteVersion
                     self.latestReleaseURL = URL(string: htmlURL)
                     self.latestDownloadURL = dmgURL
-
-                    if isNewerVersion(remoteVersion, than: self.currentVersion) {
-                        self.updateAvailable = true
-                    } else {
-                        self.updateAvailable = false
-                    }
+                    self.updateAvailable = isNewerVersion(remoteVersion, than: self.currentVersion)
                 }
             } catch {
-                print("[UpdateManager] Update check failed: \(error)")
+                await MainActor.run { self.updateError = "Check failed: \(error.localizedDescription)" }
             }
         }
     }
 
-    /// Check for updates silently in the background.
     func checkForUpdatesInBackground() {
         checkForUpdates()
     }
 
-    /// Open the latest release page or download URL in the browser.
-    func downloadUpdate() {
-        if let url = latestDownloadURL ?? latestReleaseURL {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    /// Start checking for updates on app launch (if automatic checks are enabled).
     func startUpdater() {
         if automaticallyChecksForUpdates {
-            // Delay initial check by 30 seconds to not slow down launch
             Task {
                 try? await Task.sleep(for: .seconds(30))
                 checkForUpdatesInBackground()
@@ -142,9 +113,197 @@ final class UpdateManager {
         }
     }
 
+    // MARK: - Download & Install
+
+    /// Download the DMG, mount it, replace the app, and relaunch.
+    func installUpdate() {
+        guard let dmgURL = latestDownloadURL else {
+            // Fallback: open in browser
+            if let url = latestReleaseURL {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
+
+        isDownloading = true
+        downloadProgress = 0
+        updateError = nil
+
+        Task {
+            do {
+                // 1. Download DMG to temp
+                let dmgPath = try await downloadDMG(from: dmgURL)
+
+                await MainActor.run {
+                    self.isDownloading = false
+                    self.isInstalling = true
+                }
+
+                // 2. Mount DMG
+                let mountPoint = try await mountDMG(at: dmgPath)
+
+                // 3. Find .app in mounted volume
+                let appPath = try findApp(in: mountPoint)
+
+                // 4. Get current app location
+                guard let currentAppPath = currentAppBundlePath() else {
+                    throw UpdateError.cannotLocateCurrentApp
+                }
+
+                // 5. Replace app via shell script that runs after we quit
+                try await replaceAndRelaunch(
+                    newApp: appPath,
+                    currentApp: currentAppPath,
+                    mountPoint: mountPoint,
+                    dmgPath: dmgPath
+                )
+
+            } catch {
+                await MainActor.run {
+                    self.isDownloading = false
+                    self.isInstalling = false
+                    self.updateError = "Install failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    /// Open the release page in a browser (fallback).
+    func downloadUpdate() {
+        if let url = latestDownloadURL ?? latestReleaseURL {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    // MARK: - Private Helpers
+
+    private func downloadDMG(from url: URL) async throws -> String {
+        let tempDir = FileManager.default.temporaryDirectory
+        let dmgPath = tempDir.appendingPathComponent("QuinnVoice-update.dmg")
+
+        // Remove old download
+        try? FileManager.default.removeItem(at: dmgPath)
+
+        // Stream download with progress
+        let (asyncBytes, response) = try await URLSession.shared.bytes(from: url)
+        let totalBytes = response.expectedContentLength
+        var downloadedBytes: Int64 = 0
+        var data = Data()
+
+        for try await byte in asyncBytes {
+            data.append(byte)
+            downloadedBytes += 1
+            if totalBytes > 0 && downloadedBytes % 65536 == 0 {
+                let progress = Double(downloadedBytes) / Double(totalBytes)
+                await MainActor.run { self.downloadProgress = progress }
+            }
+        }
+
+        try data.write(to: dmgPath)
+        await MainActor.run { self.downloadProgress = 1.0 }
+        return dmgPath.path
+    }
+
+    private func mountDMG(at path: String) async throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        process.arguments = ["attach", path, "-nobrowse", "-readonly", "-mountpoint", "/tmp/QuinnVoice-update"]
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            throw UpdateError.dmgMountFailed
+        }
+
+        return "/tmp/QuinnVoice-update"
+    }
+
+    private func findApp(in mountPoint: String) throws -> String {
+        let fm = FileManager.default
+        let contents = try fm.contentsOfDirectory(atPath: mountPoint)
+        guard let appName = contents.first(where: { $0.hasSuffix(".app") }) else {
+            throw UpdateError.appNotFoundInDMG
+        }
+        return (mountPoint as NSString).appendingPathComponent(appName)
+    }
+
+    private func currentAppBundlePath() -> String? {
+        let bundlePath = Bundle.main.bundlePath
+        // Verify it's a .app bundle
+        guard bundlePath.hasSuffix(".app") else { return nil }
+        return bundlePath
+    }
+
+    private nonisolated func replaceAndRelaunch(
+        newApp: String,
+        currentApp: String,
+        mountPoint: String,
+        dmgPath: String
+    ) async throws {
+        // Write a shell script that:
+        // 1. Waits for the app to quit
+        // 2. Copies the new app over the old one
+        // 3. Unmounts the DMG
+        // 4. Cleans up
+        // 5. Relaunches the app
+        let script = """
+        #!/bin/bash
+        # Wait for app to quit (up to 10 seconds)
+        for i in $(seq 1 20); do
+            if ! pgrep -x "QuinnVoice" > /dev/null 2>&1; then
+                break
+            fi
+            sleep 0.5
+        done
+
+        # Remove old app
+        rm -rf "\(currentApp)"
+
+        # Copy new app
+        cp -R "\(newApp)" "\(currentApp)"
+
+        # Unmount DMG
+        hdiutil detach "\(mountPoint)" -quiet 2>/dev/null
+
+        # Clean up DMG
+        rm -f "\(dmgPath)"
+
+        # Relaunch
+        open "\(currentApp)"
+
+        # Self-destruct
+        rm -f /tmp/quinnvoice-update.sh
+        """
+
+        let scriptPath = "/tmp/quinnvoice-update.sh"
+        try script.write(toFile: scriptPath, atomically: true, encoding: .utf8)
+
+        // Make executable
+        let chmod = Process()
+        chmod.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        chmod.arguments = ["+x", scriptPath]
+        try chmod.run()
+        chmod.waitUntilExit()
+
+        // Launch the update script in background
+        let launcher = Process()
+        launcher.executableURL = URL(fileURLWithPath: "/bin/bash")
+        launcher.arguments = [scriptPath]
+        try launcher.run()
+
+        // Quit the app
+        await MainActor.run {
+            NSApplication.shared.terminate(nil)
+        }
+    }
+
     // MARK: - Version Comparison
 
-    /// Compare semantic versions. Returns true if `remote` is newer than `local`.
     private func isNewerVersion(_ remote: String, than local: String) -> Bool {
         let remoteParts = remote.split(separator: ".").compactMap { Int($0) }
         let localParts = local.split(separator: ".").compactMap { Int($0) }
@@ -156,5 +315,21 @@ final class UpdateManager {
             if r < l { return false }
         }
         return false
+    }
+
+    // MARK: - Errors
+
+    enum UpdateError: LocalizedError {
+        case dmgMountFailed
+        case appNotFoundInDMG
+        case cannotLocateCurrentApp
+
+        var errorDescription: String? {
+            switch self {
+            case .dmgMountFailed: return "Failed to mount the update DMG"
+            case .appNotFoundInDMG: return "No app found in the update DMG"
+            case .cannotLocateCurrentApp: return "Cannot locate the current app bundle"
+            }
+        }
     }
 }

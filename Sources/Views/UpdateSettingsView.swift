@@ -29,7 +29,7 @@ struct UpdateSettingsView: View {
                             Image(systemName: "arrow.down.circle.fill")
                                 .foregroundStyle(.green)
                         }
-                    } else if updateManager.lastCheckDate != nil {
+                    } else if updateManager.lastCheckDate != nil, !updateManager.isChecking {
                         Text("Up to date ✓")
                             .font(.caption)
                             .foregroundStyle(.green)
@@ -52,7 +52,7 @@ struct UpdateSettingsView: View {
                         }
                     }
                 }
-                .disabled(updateManager.isChecking)
+                .disabled(!updateManager.canCheckForUpdates)
 
                 if let lastCheck = updateManager.lastCheckDate ?? configManager.config.lastUpdateCheck {
                     HStack {
@@ -61,6 +61,18 @@ struct UpdateSettingsView: View {
                             .foregroundStyle(.secondary)
                         Spacer()
                         Text(lastCheck, style: .relative)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            if let error = updateManager.updateError {
+                Section {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.yellow)
+                        Text(error)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -83,33 +95,57 @@ struct UpdateSettingsView: View {
 
             if updateManager.updateAvailable, let latest = updateManager.latestVersion {
                 Section("Available Update") {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("QuinnVoice \(latest)")
-                                .font(.body)
-                                .fontWeight(.medium)
-                            if updateManager.latestDownloadURL != nil {
-                                Text("DMG ready to download")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Text("View release on GitHub")
-                                    .font(.caption)
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("QuinnVoice \(latest)")
+                                    .font(.body)
+                                    .fontWeight(.medium)
+
+                                if updateManager.isDownloading {
+                                    Text("Downloading…")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                } else if updateManager.isInstalling {
+                                    Text("Installing…")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Text("Ready to install")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+
+                            Spacer()
+
+                            if !updateManager.isDownloading && !updateManager.isInstalling {
+                                Button {
+                                    updateManager.installUpdate()
+                                } label: {
+                                    Label("Install & Relaunch", systemImage: "arrow.down.circle.fill")
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                        }
+
+                        if updateManager.isDownloading {
+                            ProgressView(value: updateManager.downloadProgress) {
+                                Text("\(Int(updateManager.downloadProgress * 100))%")
+                                    .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
                         }
 
-                        Spacer()
-
-                        Button {
-                            updateManager.downloadUpdate()
-                        } label: {
-                            Label(
-                                updateManager.latestDownloadURL != nil ? "Download" : "View Release",
-                                systemImage: "arrow.down.circle.fill"
-                            )
+                        if updateManager.isInstalling {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Replacing app and relaunching…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                        .buttonStyle(.borderedProminent)
                     }
                 }
             }
