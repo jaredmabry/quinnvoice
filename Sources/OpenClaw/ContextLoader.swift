@@ -3,7 +3,8 @@ import Foundation
 /// Loads Quinn's persona and user context from the OpenClaw workspace files.
 ///
 /// Optionally includes live screen context (frontmost app, window title, selected text)
-/// when ``includeScreenContext`` is enabled.
+/// when ``includeScreenContext`` is enabled. Also integrates soul/personality and memory
+/// content from their respective managers.
 ///
 /// When a ``GeminiClient`` is provided and context caching is enabled, MEMORY.md content
 /// exceeding 2000 tokens (~8000 characters) is automatically summarized using Flash
@@ -22,6 +23,12 @@ actor ContextLoader {
     /// Whether context summarization is enabled.
     var contextSummarizationEnabled: Bool = true
 
+    /// Soul/personality text to inject into system instructions.
+    var soulContent: String?
+
+    /// Memory text to inject into system instructions.
+    var memoryContent: String?
+
     /// Approximate character threshold for MEMORY.md summarization (~2000 tokens).
     private let memorySummarizationThreshold = 8000
 
@@ -29,8 +36,17 @@ actor ContextLoader {
         self.bridge = bridge
         self.workspacePath = workspacePath
         self.includeScreenContext = includeScreenContext
-        // ScreenContextProvider is MainActor-bound, but we create it here and use it from MainActor calls
         self.screenContextProvider = nil
+    }
+
+    /// Update the soul content from SoulManager.
+    func setSoulContent(_ content: String?) {
+        self.soulContent = content
+    }
+
+    /// Update the memory content from MemoryManager.
+    func setMemoryContent(_ content: String?) {
+        self.memoryContent = content
     }
 
     /// Build the full system instruction string from workspace context files.
@@ -45,8 +61,10 @@ actor ContextLoader {
         Skip filler phrases — just help. Have opinions. Be resourceful.
         """)
 
-        // Load SOUL.md
-        if let soul = await loadFile("SOUL.md") {
+        // Inject soul/personality from SoulManager (takes priority over workspace SOUL.md)
+        if let soul = soulContent, !soul.isEmpty {
+            parts.append("## Persona\n\(soul)")
+        } else if let soul = await loadFile("SOUL.md") {
             parts.append("## Persona\n\(soul)")
         }
 
@@ -60,7 +78,13 @@ actor ContextLoader {
             parts.append("## About the User\n\(user)")
         }
 
-        // Load MEMORY.md (summarize if too long)
+        // Inject on-device memory from MemoryManager (takes priority over workspace MEMORY.md)
+        if let memory = memoryContent, !memory.isEmpty {
+            let memoryCompressed = await compressIfNeeded(memory, label: "on-device memory")
+            parts.append("## On-Device Memory\n\(memoryCompressed)")
+        }
+
+        // Load workspace MEMORY.md (summarize if too long)
         if let memory = await loadFile("MEMORY.md") {
             let memoryContent = await compressIfNeeded(memory, label: "MEMORY.md")
             parts.append("## Memory\n\(memoryContent)")
@@ -98,8 +122,6 @@ actor ContextLoader {
     }
 
     /// Compress context text using GeminiClient (Flash) if it exceeds the threshold.
-    ///
-    /// Falls back to simple truncation if summarization fails.
     private func compressIfNeeded(_ text: String, label: String) async -> String {
         guard contextSummarizationEnabled,
               text.count > memorySummarizationThreshold,
@@ -113,7 +135,6 @@ actor ContextLoader {
             return summary
         } catch {
             print("[ContextLoader] Summarization failed for \(label), using truncated version: \(error)")
-            // Fallback: truncate to threshold
             return String(text.prefix(memorySummarizationThreshold)) + "\n[…truncated]"
         }
     }

@@ -9,9 +9,6 @@ enum KeychainHelper {
     private static let service = "com.quinnvoice.app"
 
     /// Save a string value to the Keychain.
-    /// - Parameters:
-    ///   - value: The string to store.
-    ///   - account: The key/account name for this entry.
     @discardableResult
     static func save(_ value: String, forAccount account: String) -> Bool {
         guard let data = value.data(using: .utf8) else { return false }
@@ -27,7 +24,6 @@ enum KeychainHelper {
         // Don't store empty strings
         guard !value.isEmpty else { return true }
 
-        // Add new item
         let addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -41,8 +37,6 @@ enum KeychainHelper {
     }
 
     /// Retrieve a string value from the Keychain.
-    /// - Parameter account: The key/account name for this entry.
-    /// - Returns: The stored string, or nil if not found.
     static func load(forAccount account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -64,7 +58,6 @@ enum KeychainHelper {
     }
 
     /// Delete a value from the Keychain.
-    /// - Parameter account: The key/account name to delete.
     @discardableResult
     static func delete(forAccount account: String) -> Bool {
         let query: [String: Any] = [
@@ -75,6 +68,16 @@ enum KeychainHelper {
         let status = SecItemDelete(query as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound
     }
+}
+
+// MARK: - Soul Source
+
+/// How the soul/personality content is provided.
+enum SoulSource: String, Codable, Sendable {
+    /// Loaded from an imported .md file.
+    case file
+    /// Written directly in the editor.
+    case custom
 }
 
 // MARK: - App Configuration
@@ -92,56 +95,87 @@ struct AppConfig: Codable, Sendable {
 
     // MARK: - Hotkey Configuration
 
-    /// Whether the global hotkey (⌥Space) is enabled.
+    /// Whether the global hotkey is enabled.
     var hotkeyEnabled: Bool
 
     /// The hotkey behavior mode (hold-to-talk vs toggle).
     var hotkeyMode: HotkeyMode
 
+    /// The key code for the hotkey (Carbon virtual key code). Default: 49 (Space).
+    var hotkeyKeyCode: UInt16
+
+    /// The modifier flags for the hotkey. Default: Option key.
+    var hotkeyModifiers: UInt
+
     // MARK: - Screen Context Configuration
 
-    /// Whether to include the frontmost app and window title in Gemini context.
     var includeScreenContext: Bool
 
     // MARK: - Clipboard Configuration
 
-    /// Whether Gemini can access the clipboard via `get_clipboard` / `set_clipboard` tools.
     var clipboardAccess: Bool
 
     // MARK: - Wake Word Configuration
 
-    /// Whether always-on "Hey Quinn" wake word detection is enabled.
     var wakeWordEnabled: Bool
-
-    /// The wake phrase to listen for (e.g., "Hey Quinn").
     var wakePhrase: String
 
     // MARK: - Notification Configuration
 
-    /// Whether to surface tool results as macOS notifications.
     var notificationsEnabled: Bool
 
     // MARK: - AI Model Configuration
 
-    /// Preferred model selection: auto, flash, or pro.
     var preferredModel: ModelPreference
-
-    /// Whether to use context caching for system prompts.
     var contextCachingEnabled: Bool
 
     // MARK: - Agent / Computer Use Configuration
 
-    /// Whether the autonomous agent mode is enabled.
     var agentModeEnabled: Bool
-
-    /// Maximum number of observe-act iterations before the agent stops.
     var agentMaxIterations: Int
-
-    /// Whether to pause and confirm before executing destructive commands.
     var agentConfirmDestructive: Bool
-
-    /// Applications the agent is allowed to interact with.
     var agentAllowedApps: [String]
+
+    // MARK: - Soul / Personality Configuration
+
+    /// How the soul content is sourced.
+    var soulSource: SoulSource
+
+    /// Custom soul text (when soulSource == .custom).
+    var soulText: String
+
+    /// Filename of imported soul file (when soulSource == .file).
+    var soulFileName: String
+
+    // MARK: - Update Configuration
+
+    /// Whether to automatically check for updates on launch.
+    var autoCheckUpdates: Bool
+
+    /// The last time an update check was performed.
+    var lastUpdateCheck: Date?
+
+    // MARK: - Appearance Configuration
+
+    /// The app color scheme preference.
+    var theme: AppTheme
+
+    /// The accent color for the app UI.
+    var accentColor: AccentColorChoice
+
+    /// The waveform animation style.
+    var waveformStyle: WaveformStyle
+
+    /// The voice panel background opacity (0.5–1.0).
+    var panelOpacity: Double
+
+    /// Whether to reduce animations (manual override).
+    var reduceAnimations: Bool
+
+    // MARK: - Audio Processing Configuration
+
+    /// Audio input processing settings (noise suppression, VAD, etc.).
+    var audioProcessing: AudioProcessingConfig
 
     /// Whether the API key has been configured
     var isConfigured: Bool { !geminiApiKey.isEmpty }
@@ -149,11 +183,19 @@ struct AppConfig: Codable, Sendable {
     // Exclude geminiApiKey from JSON serialization — it lives in Keychain
     enum CodingKeys: String, CodingKey {
         case geminiModel, openclawUrl, voiceConfig, continuousMode, showTranscript
-        case hotkeyEnabled, hotkeyMode, includeScreenContext, clipboardAccess
+        case hotkeyEnabled, hotkeyMode, hotkeyKeyCode, hotkeyModifiers
+        case includeScreenContext, clipboardAccess
         case wakeWordEnabled, wakePhrase, notificationsEnabled
         case preferredModel, contextCachingEnabled
         case agentModeEnabled, agentMaxIterations, agentConfirmDestructive, agentAllowedApps
+        case soulSource, soulText, soulFileName
+        case autoCheckUpdates, lastUpdateCheck
+        case theme, accentColor, waveformStyle, panelOpacity, reduceAnimations
+        case audioProcessing
     }
+
+    /// Default Option key modifier value (NSEvent.ModifierFlags.option.rawValue).
+    static let defaultOptionModifier: UInt = 524288 // NSEvent.ModifierFlags.option.rawValue
 
     init(geminiApiKey: String = "",
          geminiModel: String = "gemini-live-2.5-flash-native-audio",
@@ -163,6 +205,8 @@ struct AppConfig: Codable, Sendable {
          showTranscript: Bool = false,
          hotkeyEnabled: Bool = true,
          hotkeyMode: HotkeyMode = .hold,
+         hotkeyKeyCode: UInt16 = 49,
+         hotkeyModifiers: UInt = defaultOptionModifier,
          includeScreenContext: Bool = true,
          clipboardAccess: Bool = true,
          wakeWordEnabled: Bool = false,
@@ -173,7 +217,18 @@ struct AppConfig: Codable, Sendable {
          agentModeEnabled: Bool = true,
          agentMaxIterations: Int = 20,
          agentConfirmDestructive: Bool = true,
-         agentAllowedApps: [String] = ["Terminal", "iTerm2", "Xcode", "Visual Studio Code", "Safari", "Finder"]) {
+         agentAllowedApps: [String] = ["Terminal", "iTerm2", "Xcode", "Visual Studio Code", "Safari", "Finder"],
+         soulSource: SoulSource = .custom,
+         soulText: String = "",
+         soulFileName: String = "",
+         autoCheckUpdates: Bool = true,
+         lastUpdateCheck: Date? = nil,
+         theme: AppTheme = .system,
+         accentColor: AccentColorChoice = .system,
+         waveformStyle: WaveformStyle = .subtle,
+         panelOpacity: Double = 0.9,
+         reduceAnimations: Bool = false,
+         audioProcessing: AudioProcessingConfig = .default) {
         self.geminiApiKey = geminiApiKey
         self.geminiModel = geminiModel
         self.openclawUrl = openclawUrl
@@ -182,6 +237,8 @@ struct AppConfig: Codable, Sendable {
         self.showTranscript = showTranscript
         self.hotkeyEnabled = hotkeyEnabled
         self.hotkeyMode = hotkeyMode
+        self.hotkeyKeyCode = hotkeyKeyCode
+        self.hotkeyModifiers = hotkeyModifiers
         self.includeScreenContext = includeScreenContext
         self.clipboardAccess = clipboardAccess
         self.wakeWordEnabled = wakeWordEnabled
@@ -193,6 +250,17 @@ struct AppConfig: Codable, Sendable {
         self.agentMaxIterations = agentMaxIterations
         self.agentConfirmDestructive = agentConfirmDestructive
         self.agentAllowedApps = agentAllowedApps
+        self.soulSource = soulSource
+        self.soulText = soulText
+        self.soulFileName = soulFileName
+        self.autoCheckUpdates = autoCheckUpdates
+        self.lastUpdateCheck = lastUpdateCheck
+        self.theme = theme
+        self.accentColor = accentColor
+        self.waveformStyle = waveformStyle
+        self.panelOpacity = panelOpacity
+        self.reduceAnimations = reduceAnimations
+        self.audioProcessing = audioProcessing
     }
 
     init(from decoder: Decoder) throws {
@@ -205,6 +273,8 @@ struct AppConfig: Codable, Sendable {
         self.showTranscript = try container.decode(Bool.self, forKey: .showTranscript)
         self.hotkeyEnabled = try container.decodeIfPresent(Bool.self, forKey: .hotkeyEnabled) ?? true
         self.hotkeyMode = try container.decodeIfPresent(HotkeyMode.self, forKey: .hotkeyMode) ?? .hold
+        self.hotkeyKeyCode = try container.decodeIfPresent(UInt16.self, forKey: .hotkeyKeyCode) ?? 49
+        self.hotkeyModifiers = try container.decodeIfPresent(UInt.self, forKey: .hotkeyModifiers) ?? AppConfig.defaultOptionModifier
         self.includeScreenContext = try container.decodeIfPresent(Bool.self, forKey: .includeScreenContext) ?? true
         self.clipboardAccess = try container.decodeIfPresent(Bool.self, forKey: .clipboardAccess) ?? true
         self.wakeWordEnabled = try container.decodeIfPresent(Bool.self, forKey: .wakeWordEnabled) ?? false
@@ -216,6 +286,17 @@ struct AppConfig: Codable, Sendable {
         self.agentMaxIterations = try container.decodeIfPresent(Int.self, forKey: .agentMaxIterations) ?? 20
         self.agentConfirmDestructive = try container.decodeIfPresent(Bool.self, forKey: .agentConfirmDestructive) ?? true
         self.agentAllowedApps = try container.decodeIfPresent([String].self, forKey: .agentAllowedApps) ?? ["Terminal", "iTerm2", "Xcode", "Visual Studio Code", "Safari", "Finder"]
+        self.soulSource = try container.decodeIfPresent(SoulSource.self, forKey: .soulSource) ?? .custom
+        self.soulText = try container.decodeIfPresent(String.self, forKey: .soulText) ?? ""
+        self.soulFileName = try container.decodeIfPresent(String.self, forKey: .soulFileName) ?? ""
+        self.autoCheckUpdates = try container.decodeIfPresent(Bool.self, forKey: .autoCheckUpdates) ?? true
+        self.lastUpdateCheck = try container.decodeIfPresent(Date.self, forKey: .lastUpdateCheck)
+        self.theme = try container.decodeIfPresent(AppTheme.self, forKey: .theme) ?? .system
+        self.accentColor = try container.decodeIfPresent(AccentColorChoice.self, forKey: .accentColor) ?? .system
+        self.waveformStyle = try container.decodeIfPresent(WaveformStyle.self, forKey: .waveformStyle) ?? .subtle
+        self.panelOpacity = try container.decodeIfPresent(Double.self, forKey: .panelOpacity) ?? 0.9
+        self.reduceAnimations = try container.decodeIfPresent(Bool.self, forKey: .reduceAnimations) ?? false
+        self.audioProcessing = try container.decodeIfPresent(AudioProcessingConfig.self, forKey: .audioProcessing) ?? .default
     }
 
     static let `default` = AppConfig()

@@ -131,6 +131,28 @@ actor GeminiLiveSession {
         try await ws.send(.string(String(data: jsonData, encoding: .utf8)!))
     }
 
+    /// Send a text message as a user turn (used for voice preview).
+    func sendText(_ text: String) async throws {
+        guard let ws = webSocket else { throw SessionError.notConnected }
+
+        let message: [String: Any] = [
+            "clientContent": [
+                "turns": [
+                    [
+                        "role": "user",
+                        "parts": [
+                            ["text": text]
+                        ]
+                    ]
+                ],
+                "turnComplete": true
+            ]
+        ]
+
+        let jsonData = try JSONSerialization.data(withJSONObject: message)
+        try await ws.send(.string(String(data: jsonData, encoding: .utf8)!))
+    }
+
     /// Send a function call response back to Gemini.
     func sendFunctionResponse(callId: String, name: String, response: String) async throws {
         guard let ws = webSocket else { throw SessionError.notConnected }

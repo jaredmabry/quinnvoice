@@ -4,24 +4,56 @@ import SwiftUI
 struct QuinnVoiceApp: App {
     @State private var appState = AppState()
     @State private var configManager = ConfigManager()
+    @State private var memoryManager = MemoryManager()
+    @State private var soulManager = SoulManager()
     @State private var sessionController: SessionController?
     @State private var hotkeyManager = HotkeyManager()
     @State private var wakeWordDetector = WakeWordDetector()
     @State private var notificationManager = NotificationManager()
     @State private var clipboardManager = ClipboardManager()
+    @State private var conversationStore = ConversationStore()
+    @State private var updateManager = UpdateManager()
+    @State private var profileManager = ProfileManager()
+    @State private var showHistoryWindow = false
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         MenuBarExtra("QuinnVoice", systemImage: menuBarIcon) {
             if configManager.config.isConfigured {
-                VoicePanelView(
-                    appState: appState,
-                    onToggleSession: { startSession() },
-                    onStopSession: { stopSession() },
-                    onOpenSettings: { openSettings() },
-                    onToggleCamera: { toggleCamera() },
-                    onToggleScreen: { toggleScreen() }
-                )
+                VStack(spacing: 0) {
+                    VoicePanelView(
+                        appState: appState,
+                        onToggleSession: { startSession() },
+                        onStopSession: { stopSession() },
+                        onOpenSettings: { openSettings() },
+                        onToggleCamera: { toggleCamera() },
+                        onToggleScreen: { toggleScreen() }
+                    )
+
+                    // Quick action buttons
+                    HStack(spacing: 12) {
+                        Button {
+                            openWindow(id: "conversation-history")
+                            NSApp.activate(ignoringOtherApps: true)
+                        } label: {
+                            Label("History", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+
+                        Button {
+                            updateManager.checkForUpdates()
+                        } label: {
+                            Label("Updates", systemImage: "arrow.triangle.2.circlepath")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
+                }
             } else {
                 VStack(spacing: 12) {
                     Image(systemName: "key.fill")
@@ -46,8 +78,19 @@ struct QuinnVoiceApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsView(configManager: configManager)
+            SettingsView(
+                configManager: configManager,
+                memoryManager: memoryManager,
+                soulManager: soulManager
+            )
         }
+
+        Window("Conversation History", id: "conversation-history") {
+            ConversationHistoryView(store: conversationStore)
+                .frame(minWidth: 700, minHeight: 500)
+        }
+        .defaultSize(width: 700, height: 500)
+        .keyboardShortcut("h", modifiers: .command)
     }
 
     private var menuBarIcon: String {
@@ -78,7 +121,11 @@ struct QuinnVoiceApp: App {
             appState: appState,
             config: configManager.config,
             clipboardManager: clipboardManager,
-            notificationManager: notificationManager
+            notificationManager: notificationManager,
+            memoryManager: memoryManager,
+            soulManager: soulManager,
+            conversationStore: conversationStore,
+            profileManager: profileManager
         )
         self.sessionController = controller
 
@@ -110,9 +157,22 @@ struct QuinnVoiceApp: App {
 
     /// Called to set up global services (hotkey, wake word, notifications, clipboard).
     private func setupServices() {
-        // Set up hotkey manager
+        // Load memory and soul on app launch
+        memoryManager.load()
+        soulManager.load()
+
+        // Sync soul text from config if needed
+        if configManager.config.soulSource == .custom && !configManager.config.soulText.isEmpty {
+            soulManager.updateContent(configManager.config.soulText)
+        }
+
+        // Set up hotkey manager with configurable key
         if configManager.config.hotkeyEnabled {
             hotkeyManager.mode = configManager.config.hotkeyMode
+            hotkeyManager.configure(
+                keyCode: configManager.config.hotkeyKeyCode,
+                modifiers: configManager.config.hotkeyModifiers
+            )
 
             hotkeyManager.onActivate = { [self] in
                 appState.hotkeyActive = true
@@ -168,9 +228,6 @@ struct QuinnVoiceApp: App {
 
 /// Coordinates the audio engine, Gemini session, OpenClaw bridge, and multi-modal providers
 /// for a single voice session.
-///
-/// Manages the lifecycle of audio capture, Gemini Live WebSocket connection,
-/// screen context capture, clipboard tools, notification relay, and camera/screen sharing.
 @MainActor
 final class SessionController {
     private let appState: AppState
@@ -184,17 +241,26 @@ final class SessionController {
     private let multiModalProvider = MultiModalProvider()
     private let clipboardManager: ClipboardManager?
     private let notificationManager: NotificationManager?
+    private let conversationStore: ConversationStore?
+    private let profileManager: ProfileManager?
+    private var currentSessionId: UUID?
+    private let memoryManager: MemoryManager?
+    private let soulManager: SoulManager?
 
     // MARK: - Agent / Computer Use
     private let computerController = ComputerController()
     private var agentLoop: AgentLoop?
     private let agentOverlayController = AgentOverlayWindowController()
 
-    init(appState: AppState, config: AppConfig, clipboardManager: ClipboardManager? = nil, notificationManager: NotificationManager? = nil) {
+    init(appState: AppState, config: AppConfig, clipboardManager: ClipboardManager? = nil, notificationManager: NotificationManager? = nil, memoryManager: MemoryManager? = nil, soulManager: SoulManager? = nil, conversationStore: ConversationStore? = nil, profileManager: ProfileManager? = nil) {
         self.appState = appState
         self.config = config
         self.clipboardManager = clipboardManager
         self.notificationManager = notificationManager
+        self.memoryManager = memoryManager
+        self.soulManager = soulManager
+        self.conversationStore = conversationStore
+        self.profileManager = profileManager
 
         let bridge = OpenClawBridge(baseURL: URL(string: config.openclawUrl)!)
         self.toolProxy = GeminiToolProxy(bridge: bridge)
@@ -206,6 +272,22 @@ final class SessionController {
         appState.clearTranscript()
         appState.transition(to: .listening)
         appState.isSessionActive = true
+
+        // Start a new conversation session for history recording
+        if let store = conversationStore {
+            let session = store.startSession()
+            currentSessionId = session.id
+        }
+
+        // Load active profile's soul and memory if available
+        if let profile = profileManager?.activeProfile {
+            if !profile.soulText.isEmpty {
+                await contextLoader.setSoulContent(profile.soulText)
+            }
+            if !profile.memoryText.isEmpty {
+                await contextLoader.setMemoryContent(profile.memoryText)
+            }
+        }
 
         // Configure tool proxy with clipboard, notification, and computer-use managers
         await toolProxy.configure(
@@ -224,6 +306,20 @@ final class SessionController {
             await computerController.setAllowedApps(config.agentAllowedApps)
         }
 
+        // Inject soul and memory content into context loader
+        if let soulManager {
+            let soulText = soulManager.soulText
+            if !soulText.isEmpty {
+                await contextLoader.setSoulContent(soulText)
+            }
+        }
+        if let memoryManager {
+            let memoryText = memoryManager.memoryText
+            if !memoryText.isEmpty {
+                await contextLoader.setMemoryContent(memoryText)
+            }
+        }
+
         // Capture screen context if enabled
         var screenContext: String? = nil
         if config.includeScreenContext {
@@ -232,7 +328,7 @@ final class SessionController {
             }
         }
 
-        // Load system instructions from OpenClaw (with screen context)
+        // Load system instructions from OpenClaw (with screen context + soul + memory)
         let systemInstructions = await contextLoader.loadSystemInstructions(screenContext: screenContext)
 
         // Create Gemini Live session
@@ -304,13 +400,18 @@ final class SessionController {
         appState.isSharingCamera = false
         appState.isSharingScreen = false
 
+        // End conversation session
+        if let sessionId = currentSessionId {
+            conversationStore?.endSession(sessionId)
+            currentSessionId = nil
+        }
+
         appState.transition(to: .idle)
         appState.isSessionActive = false
     }
 
     // MARK: - Multi-Modal Controls
 
-    /// Toggle camera sharing on/off during an active session.
     func toggleCamera() async {
         if multiModalProvider.isCameraActive {
             multiModalProvider.stopCamera()
@@ -325,7 +426,6 @@ final class SessionController {
         }
     }
 
-    /// Toggle screen sharing on/off during an active session.
     func toggleScreen() async {
         if multiModalProvider.isScreenActive {
             await multiModalProvider.stopScreenCapture()
@@ -353,6 +453,10 @@ final class SessionController {
 
         case .text(let text):
             appState.addTranscriptLine(TranscriptLine(role: .assistant, text: text))
+            // Record assistant text to conversation history
+            if let sessionId = currentSessionId {
+                conversationStore?.addEntry(to: sessionId, role: .assistant, text: text)
+            }
 
         case .turnComplete:
             if config.continuousMode {
@@ -362,7 +466,6 @@ final class SessionController {
             }
 
         case .interrupted:
-            // Barge-in: stop playback and go back to listening
             audioManager.stopPlayback()
             appState.transition(to: .listening)
 
@@ -383,7 +486,6 @@ final class SessionController {
 
     private func handleFunctionCall(name: String, id: String, arguments: [String: String]) {
         Task {
-            // Handle task_complete — ends agent mode
             if name == "task_complete" {
                 let summary = arguments["summary"] ?? "Task completed"
                 await stopAgentMode()
@@ -398,7 +500,6 @@ final class SessionController {
 
     // MARK: - Agent Mode
 
-    /// Start the autonomous agent loop for a given task.
     func startAgentMode(task: String) async {
         guard config.agentModeEnabled else { return }
 
@@ -418,7 +519,6 @@ final class SessionController {
         )
         self.agentLoop = loop
 
-        // Show overlay
         agentOverlayController.show(
             appState: appState,
             onStop: { [weak self] in
@@ -431,13 +531,11 @@ final class SessionController {
             }
         )
 
-        // Start the loop
         Task {
             await loop.start()
         }
     }
 
-    /// Stop the agent loop and clean up.
     func stopAgentMode() async {
         await agentLoop?.stop()
         agentLoop = nil
@@ -445,7 +543,6 @@ final class SessionController {
         agentOverlayController.hide()
     }
 
-    /// Handle state updates from the agent loop.
     private func handleAgentStateUpdate(_ update: AgentLoop.AgentStateUpdate) {
         switch update {
         case .started(let task, let maxIter):
@@ -493,7 +590,6 @@ extension GeminiLiveSession {
 // MARK: - Helper to configure tool proxy on actor
 
 extension GeminiToolProxy {
-    /// Configure the tool proxy with clipboard and notification managers.
     func configure(
         clipboardManager: ClipboardManager?,
         notificationManager: NotificationManager?,
@@ -506,7 +602,6 @@ extension GeminiToolProxy {
         self.notificationsEnabled = notificationsEnabled
     }
 
-    /// Configure the tool proxy for computer use / agent mode.
     func configureComputerUse(controller: ComputerController, enabled: Bool) {
         self.computerController = controller
         self.computerUseEnabled = enabled
