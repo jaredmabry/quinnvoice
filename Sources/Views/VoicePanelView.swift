@@ -38,14 +38,6 @@ struct VoicePanelView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Toggle transcript")
-
-                    Button {
-                        onOpenSettings()
-                    } label: {
-                        Image(systemName: "gear")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.plain)
                 }
 
                 // Waveform visualization
