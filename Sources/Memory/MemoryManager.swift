@@ -1,7 +1,6 @@
 import Foundation
-import Combine
 
-/// Sync status for iCloud documents.
+/// Sync status for iCloud key-value store.
 enum SyncStatus: String, Sendable {
     case synced
     case syncing
@@ -9,10 +8,11 @@ enum SyncStatus: String, Sendable {
     case error
 }
 
-/// Manages an on-device `memory.md` file with iCloud Drive sync.
+/// Manages an on-device `memory.md` with iCloud sync via `NSUbiquitousKeyValueStore`.
 ///
-/// Primary storage: iCloud Drive ubiquity container (`iCloud.com.mabryventures.quinnvoice`).
-/// Fallback: local `~/Library/Application Support/QuinnVoice/memory.md` if iCloud unavailable.
+/// Uses `NSUbiquitousKeyValueStore` for cross-device sync (works without sandbox).
+/// Falls back to local-only storage if iCloud is unavailable.
+/// Local copy at `~/Library/Application Support/QuinnVoice/memory.md` always exists as backup.
 @Observable
 @MainActor
 final class MemoryManager {
@@ -22,7 +22,7 @@ final class MemoryManager {
     /// Current memory content.
     var memoryText: String = ""
 
-    /// Whether iCloud container is accessible.
+    /// Whether iCloud key-value store is accessible.
     var iCloudAvailable: Bool = false
 
     /// Current iCloud sync status.
@@ -36,13 +36,10 @@ final class MemoryManager {
 
     // MARK: - Private
 
-    private let fileName = "memory.md"
-    private let containerIdentifier = "iCloud.com.mabryventures.quinnvoice"
-    private var metadataQuery: NSMetadataQuery?
-    private var iCloudURL: URL?
-    private var localURL: URL
-    private var filePresenter: MemoryFilePresenter?
+    private let kvStoreKey = "memory_md"
+    private let localURL: URL
     private var saveTask: Task<Void, Never>?
+    private var kvStore: NSUbiquitousKeyValueStore { .default }
 
     // MARK: - Init
 
@@ -55,14 +52,13 @@ final class MemoryManager {
 
     // MARK: - Lifecycle
 
-    /// Load memory from iCloud (or local fallback) and start monitoring for changes.
+    /// Load memory from iCloud KV store (or local fallback) and start monitoring.
     func load() {
-        setupiCloud()
-        readFromDisk()
-        startMonitoring()
+        setupiCloudKVStore()
+        readContent()
     }
 
-    /// Save current memory content to disk.
+    /// Save current memory content.
     func save() {
         debouncedSave()
     }
@@ -83,58 +79,80 @@ final class MemoryManager {
         save()
     }
 
-    // MARK: - iCloud Setup
+    // MARK: - iCloud KV Store Setup
 
-    private func setupiCloud() {
-        if let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerIdentifier) {
-            let documentsURL = containerURL.appendingPathComponent("Documents", isDirectory: true)
-            try? FileManager.default.createDirectory(at: documentsURL, withIntermediateDirectories: true)
-            iCloudURL = documentsURL.appendingPathComponent(fileName)
-            iCloudAvailable = true
-            iCloudSyncStatus = .synced
-        } else {
-            iCloudAvailable = false
-            iCloudSyncStatus = .offline
-        }
-    }
+    private func setupiCloudKVStore() {
+        // NSUbiquitousKeyValueStore works without sandbox — just needs
+        // com.apple.developer.ubiquity-kvstore-identifier entitlement
+        let synced = kvStore.synchronize()
+        iCloudAvailable = synced
+        iCloudSyncStatus = synced ? .synced : .offline
 
-    private var activeURL: URL {
-        iCloudURL ?? localURL
-    }
-
-    // MARK: - Read/Write
-
-    private func readFromDisk() {
-        let url = activeURL
-        if FileManager.default.fileExists(atPath: url.path) {
-            do {
-                let content = try String(contentsOf: url, encoding: .utf8)
-                memoryText = content
-            } catch {
-                print("[MemoryManager] Failed to read \(url.lastPathComponent): \(error)")
+        // Monitor for external changes (other devices)
+        NotificationCenter.default.addObserver(
+            forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: kvStore,
+            queue: .main
+        ) { [weak self] notif in
+            let reason = notif.userInfo?[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int
+            let changedKeys = notif.userInfo?[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String]
+            Task { @MainActor [weak self] in
+                self?.handleKVStoreChange(reason: reason, changedKeys: changedKeys)
             }
         }
     }
 
-    private func writeToDisk() {
-        let url = activeURL
-        do {
-            try memoryText.write(to: url, atomically: true, encoding: .utf8)
-            if iCloudAvailable {
+    // MARK: - Read/Write
+
+    private func readContent() {
+        // Try iCloud KV store first
+        if iCloudAvailable, let cloudContent = kvStore.string(forKey: kvStoreKey), !cloudContent.isEmpty {
+            memoryText = cloudContent
+            // Also update local backup
+            writeToLocal()
+            return
+        }
+
+        // Fall back to local file
+        if FileManager.default.fileExists(atPath: localURL.path) {
+            do {
+                memoryText = try String(contentsOf: localURL, encoding: .utf8)
+            } catch {
+                print("[MemoryManager] Failed to read local file: \(error)")
+            }
+        }
+    }
+
+    private func writeContent() {
+        // Always write to local backup
+        writeToLocal()
+
+        // Write to iCloud KV store if available
+        if iCloudAvailable {
+            // KV store has 64KB per key limit — check size
+            if memoryText.utf8.count < 60_000 {
                 iCloudSyncStatus = .syncing
-                // iCloud will handle sync automatically; status updates via metadata query
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                kvStore.set(memoryText, forKey: kvStoreKey)
+                kvStore.synchronize()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
                     guard let self else { return }
                     if self.iCloudSyncStatus == .syncing {
                         self.iCloudSyncStatus = .synced
                     }
                 }
+            } else {
+                // Content too large for KV store — local only
+                print("[MemoryManager] Memory content exceeds 60KB, syncing locally only")
+                iCloudSyncStatus = .offline
             }
+        }
+    }
+
+    private func writeToLocal() {
+        do {
+            try memoryText.write(to: localURL, atomically: true, encoding: .utf8)
         } catch {
-            print("[MemoryManager] Failed to write \(url.lastPathComponent): \(error)")
-            if iCloudAvailable {
-                iCloudSyncStatus = .error
-            }
+            print("[MemoryManager] Failed to write local file: \(error)")
         }
     }
 
@@ -143,115 +161,44 @@ final class MemoryManager {
         saveTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled else { return }
-            writeToDisk()
+            writeContent()
         }
     }
 
-    // MARK: - iCloud Monitoring
+    // MARK: - iCloud Change Handling
 
-    private func startMonitoring() {
-        guard iCloudAvailable else { return }
-
-        let query = NSMetadataQuery()
-        query.searchScopes = [NSMetadataQueryUbiquitousDocumentsScope]
-        query.predicate = NSPredicate(format: "%K == %@", NSMetadataItemFSNameKey, fileName)
-
-        NotificationCenter.default.addObserver(
-            forName: .NSMetadataQueryDidUpdate,
-            object: query,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.handleMetadataUpdate()
-            }
+    private func handleKVStoreChange(reason: Int?, changedKeys: [String]?) {
+        guard let reason,
+              let changedKeys,
+              changedKeys.contains(kvStoreKey) else {
+            return
         }
 
-        NotificationCenter.default.addObserver(
-            forName: .NSMetadataQueryDidFinishGathering,
-            object: query,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.handleMetadataUpdate()
+        switch reason {
+        case NSUbiquitousKeyValueStoreServerChange,
+             NSUbiquitousKeyValueStoreInitialSyncChange:
+            // Another device updated — pull the new content
+            if let newContent = kvStore.string(forKey: kvStoreKey) {
+                memoryText = newContent
+                writeToLocal()
+                iCloudSyncStatus = .synced
             }
-        }
 
-        query.start()
-        self.metadataQuery = query
+        case NSUbiquitousKeyValueStoreQuotaViolationChange:
+            print("[MemoryManager] iCloud KV store quota exceeded")
+            iCloudSyncStatus = .error
 
-        // Set up file presenter for conflict resolution
-        let presenter = MemoryFilePresenter(url: activeURL) { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.readFromDisk()
-            }
-        }
-        NSFileCoordinator.addFilePresenter(presenter)
-        self.filePresenter = presenter
-    }
+        case NSUbiquitousKeyValueStoreAccountChange:
+            // iCloud account changed — re-sync
+            readContent()
 
-    private func handleMetadataUpdate() {
-        guard let query = metadataQuery else { return }
-        query.disableUpdates()
-        defer { query.enableUpdates() }
-
-        if query.resultCount > 0 {
-            if let item = query.result(at: 0) as? NSMetadataItem {
-                let status = item.value(forAttribute: NSMetadataUbiquitousItemDownloadingStatusKey) as? String
-                if status == NSMetadataUbiquitousItemDownloadingStatusCurrent {
-                    iCloudSyncStatus = .synced
-                    readFromDisk()
-                } else if status == NSMetadataUbiquitousItemDownloadingStatusDownloaded {
-                    iCloudSyncStatus = .synced
-                    readFromDisk()
-                } else {
-                    iCloudSyncStatus = .syncing
-                    // Trigger download if not yet downloaded
-                    if let url = iCloudURL {
-                        try? FileManager.default.startDownloadingUbiquitousItem(at: url)
-                    }
-                }
-            }
+        default:
+            break
         }
     }
 
-    /// Clean up monitoring resources. Call before releasing the manager.
+    /// Clean up monitoring resources.
     func teardown() {
-        metadataQuery?.stop()
-        metadataQuery = nil
-        if let presenter = filePresenter {
-            NSFileCoordinator.removeFilePresenter(presenter)
-            filePresenter = nil
-        }
-    }
-}
-
-// MARK: - File Presenter
-
-/// Monitors a file for external changes and invokes a callback.
-final class MemoryFilePresenter: NSObject, NSFilePresenter, Sendable {
-    let presentedItemURL: URL?
-    let presentedItemOperationQueue = OperationQueue.main
-    private let onChange: @Sendable () -> Void
-
-    init(url: URL, onChange: @escaping @Sendable () -> Void) {
-        self.presentedItemURL = url
-        self.onChange = onChange
-        super.init()
-    }
-
-    func presentedItemDidChange() {
-        onChange()
-    }
-
-    func presentedItemDidGain(_ version: NSFileVersion) {
-        // Latest write wins — resolve by using current version
-        if let url = presentedItemURL {
-            do {
-                try NSFileVersion.removeOtherVersionsOfItem(at: url)
-            } catch {
-                print("[MemoryFilePresenter] Failed to resolve conflict: \(error)")
-            }
-        }
-        onChange()
+        NotificationCenter.default.removeObserver(self)
     }
 }

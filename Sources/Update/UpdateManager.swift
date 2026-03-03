@@ -55,6 +55,14 @@ final class UpdateManager {
     /// Sparkle reads the `SUFeedURL` key from Info.plist to determine where to look for updates.
     /// If running as a debug build without a proper bundle, Sparkle initialization may fail silently.
     private func setupSparkle() {
+        // Guard: Sparkle requires a proper app bundle with Info.plist containing SUFeedURL.
+        // If running as a bare CLI binary (e.g., during testing), skip initialization.
+        guard Bundle.main.bundleIdentifier != nil,
+              Bundle.main.infoDictionary?["SUFeedURL"] != nil else {
+            print("[UpdateManager] Not in an app bundle with SUFeedURL — Sparkle disabled")
+            return
+        }
+
         // Create the updater controller — Sparkle handles all UI and download logic
         let controller = SPUStandardUpdaterController(
             startingUpdater: false,

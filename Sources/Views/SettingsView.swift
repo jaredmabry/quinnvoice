@@ -6,6 +6,8 @@ struct SettingsView: View {
     @Bindable var configManager: ConfigManager
     var memoryManager: MemoryManager
     var soulManager: SoulManager
+    var profileManager: ProfileManager?
+    var updateManager: UpdateManager?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -36,6 +38,23 @@ struct SettingsView: View {
                     Label("Memory", systemImage: "brain.head.profile")
                 }
 
+            if let profileManager {
+                ProfileSettingsView(profileManager: profileManager, configManager: configManager)
+                    .tabItem {
+                        Label("Profiles", systemImage: "person.2.fill")
+                    }
+            }
+
+            AppearanceSettingsView(configManager: configManager)
+                .tabItem {
+                    Label("Appearance", systemImage: "paintbrush.fill")
+                }
+
+            AudioSettingsView(configManager: configManager)
+                .tabItem {
+                    Label("Audio", systemImage: "mic.fill")
+                }
+
             AgentTab(configManager: configManager)
                 .tabItem {
                     Label("Agent", systemImage: "cpu")
@@ -45,6 +64,13 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Advanced", systemImage: "wrench.and.screwdriver")
                 }
+
+            if let updateManager {
+                UpdateSettingsView(updateManager: updateManager, configManager: configManager)
+                    .tabItem {
+                        Label("Updates", systemImage: "arrow.triangle.2.circlepath")
+                    }
+            }
         }
         .tabViewStyle(.automatic)
         .frame(width: 550, height: 650)
@@ -400,7 +426,7 @@ struct PersonalityTab: View {
                         .frame(minHeight: 280)
                         .scrollContentBackground(.hidden)
                         .onChange(of: configManager.config.soulText) { _, newValue in
-                            soulManager.updateContent(newValue)
+                            soulManager.soulText = newValue; soulManager.save()
                         }
                 } header: {
                     Text("Personality Prompt")
@@ -425,7 +451,8 @@ struct PersonalityTab: View {
                 if let content = try? String(contentsOf: url, encoding: .utf8) {
                     configManager.config.soulFileName = url.lastPathComponent
                     configManager.config.soulText = content
-                    soulManager.updateContent(content)
+                    soulManager.soulText = content
+                    soulManager.save()
                 }
             case .failure(let error):
                 print("[PersonalityTab] File import failed: \(error)")

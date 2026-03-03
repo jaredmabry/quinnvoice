@@ -81,7 +81,9 @@ struct QuinnVoiceApp: App {
             SettingsView(
                 configManager: configManager,
                 memoryManager: memoryManager,
-                soulManager: soulManager
+                soulManager: soulManager,
+                profileManager: profileManager,
+                updateManager: updateManager
             )
             .frame(minWidth: 550, minHeight: 650)
         }
@@ -166,7 +168,7 @@ struct QuinnVoiceApp: App {
 
         // Sync soul text from config if needed
         if configManager.config.soulSource == .custom && !configManager.config.soulText.isEmpty {
-            soulManager.updateContent(configManager.config.soulText)
+            soulManager.soulText = configManager.config.soulText; soulManager.save()
         }
 
         // Set up hotkey manager with configurable key

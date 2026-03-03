@@ -266,11 +266,11 @@ struct AppConfig: Codable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.geminiApiKey = "" // Loaded separately from Keychain
-        self.geminiModel = try container.decode(String.self, forKey: .geminiModel)
-        self.openclawUrl = try container.decode(String.self, forKey: .openclawUrl)
-        self.voiceConfig = try container.decode(VoiceConfig.self, forKey: .voiceConfig)
-        self.continuousMode = try container.decode(Bool.self, forKey: .continuousMode)
-        self.showTranscript = try container.decode(Bool.self, forKey: .showTranscript)
+        self.geminiModel = try container.decodeIfPresent(String.self, forKey: .geminiModel) ?? "gemini-live-2.5-flash-native-audio"
+        self.openclawUrl = try container.decodeIfPresent(String.self, forKey: .openclawUrl) ?? "http://127.0.0.1:18789"
+        self.voiceConfig = try container.decodeIfPresent(VoiceConfig.self, forKey: .voiceConfig) ?? .default
+        self.continuousMode = try container.decodeIfPresent(Bool.self, forKey: .continuousMode) ?? true
+        self.showTranscript = try container.decodeIfPresent(Bool.self, forKey: .showTranscript) ?? false
         self.hotkeyEnabled = try container.decodeIfPresent(Bool.self, forKey: .hotkeyEnabled) ?? true
         self.hotkeyMode = try container.decodeIfPresent(HotkeyMode.self, forKey: .hotkeyMode) ?? .hold
         self.hotkeyKeyCode = try container.decodeIfPresent(UInt16.self, forKey: .hotkeyKeyCode) ?? 49

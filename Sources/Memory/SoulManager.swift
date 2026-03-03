@@ -1,33 +1,30 @@
 import Foundation
 
-/// Manages the `soul.md` personality file with iCloud Drive sync.
+/// Manages soul/personality content with iCloud sync via `NSUbiquitousKeyValueStore`.
 ///
-/// Stores soul/personality content in the same iCloud ubiquity container as MemoryManager.
-/// Falls back to local storage if iCloud is unavailable.
+/// Same sync mechanism as `MemoryManager` — uses KV store for cross-device sync,
+/// local file as backup. Works without sandbox.
 @Observable
 @MainActor
 final class SoulManager {
 
     // MARK: - Public State
 
-    /// Current soul/personality content.
+    /// Current soul content.
     var soulText: String = ""
 
-    /// Whether iCloud container is accessible.
+    /// Whether iCloud is available for sync.
     var iCloudAvailable: Bool = false
 
-    /// Current iCloud sync status.
-    var iCloudSyncStatus: SyncStatus = .offline
+    /// Current sync status.
+    var syncStatus: SyncStatus = .offline
 
     // MARK: - Private
 
-    private let fileName = "soul.md"
-    private let containerIdentifier = "iCloud.com.mabryventures.quinnvoice"
-    private var metadataQuery: NSMetadataQuery?
-    private var iCloudURL: URL?
-    private var localURL: URL
-    private var filePresenter: MemoryFilePresenter?
+    private let kvStoreKey = "soul_md"
+    private let localURL: URL
     private var saveTask: Task<Void, Never>?
+    private var kvStore: NSUbiquitousKeyValueStore { .default }
 
     // MARK: - Init
 
@@ -40,75 +37,80 @@ final class SoulManager {
 
     // MARK: - Lifecycle
 
-    /// Load soul content from iCloud (or local fallback) and start monitoring.
+    /// Load soul content from iCloud KV store (or local fallback).
     func load() {
-        setupiCloud()
-        readFromDisk()
-        startMonitoring()
+        setupiCloudKVStore()
+        readContent()
     }
 
-    /// Save current soul content to disk.
+    /// Save current soul content.
     func save() {
         debouncedSave()
     }
 
-    /// Update soul content from an external source (e.g., file import or editor).
-    func updateContent(_ text: String) {
-        soulText = text
-        save()
-    }
+    // MARK: - iCloud KV Store
 
-    // MARK: - iCloud Setup
+    private func setupiCloudKVStore() {
+        let synced = kvStore.synchronize()
+        iCloudAvailable = synced
+        syncStatus = synced ? .synced : .offline
 
-    private func setupiCloud() {
-        if let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerIdentifier) {
-            let documentsURL = containerURL.appendingPathComponent("Documents", isDirectory: true)
-            try? FileManager.default.createDirectory(at: documentsURL, withIntermediateDirectories: true)
-            iCloudURL = documentsURL.appendingPathComponent(fileName)
-            iCloudAvailable = true
-            iCloudSyncStatus = .synced
-        } else {
-            iCloudAvailable = false
-            iCloudSyncStatus = .offline
+        NotificationCenter.default.addObserver(
+            forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: kvStore,
+            queue: .main
+        ) { [weak self] notif in
+            let reason = notif.userInfo?[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int
+            let changedKeys = notif.userInfo?[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String]
+            Task { @MainActor [weak self] in
+                self?.handleKVStoreChange(reason: reason, changedKeys: changedKeys)
+            }
         }
-    }
-
-    private var activeURL: URL {
-        iCloudURL ?? localURL
     }
 
     // MARK: - Read/Write
 
-    private func readFromDisk() {
-        let url = activeURL
-        if FileManager.default.fileExists(atPath: url.path) {
+    private func readContent() {
+        if iCloudAvailable, let cloudContent = kvStore.string(forKey: kvStoreKey), !cloudContent.isEmpty {
+            soulText = cloudContent
+            writeToLocal()
+            return
+        }
+
+        if FileManager.default.fileExists(atPath: localURL.path) {
             do {
-                let content = try String(contentsOf: url, encoding: .utf8)
-                soulText = content
+                soulText = try String(contentsOf: localURL, encoding: .utf8)
             } catch {
-                print("[SoulManager] Failed to read \(url.lastPathComponent): \(error)")
+                print("[SoulManager] Failed to read local file: \(error)")
             }
         }
     }
 
-    private func writeToDisk() {
-        let url = activeURL
-        do {
-            try soulText.write(to: url, atomically: true, encoding: .utf8)
-            if iCloudAvailable {
-                iCloudSyncStatus = .syncing
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+    private func writeContent() {
+        writeToLocal()
+
+        if iCloudAvailable {
+            if soulText.utf8.count < 60_000 {
+                syncStatus = .syncing
+                kvStore.set(soulText, forKey: kvStoreKey)
+                kvStore.synchronize()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
                     guard let self else { return }
-                    if self.iCloudSyncStatus == .syncing {
-                        self.iCloudSyncStatus = .synced
+                    if self.syncStatus == .syncing {
+                        self.syncStatus = .synced
                     }
                 }
+            } else {
+                syncStatus = .offline
             }
+        }
+    }
+
+    private func writeToLocal() {
+        do {
+            try soulText.write(to: localURL, atomically: true, encoding: .utf8)
         } catch {
-            print("[SoulManager] Failed to write \(url.lastPathComponent): \(error)")
-            if iCloudAvailable {
-                iCloudSyncStatus = .error
-            }
+            print("[SoulManager] Failed to write local file: \(error)")
         }
     }
 
@@ -117,80 +119,37 @@ final class SoulManager {
         saveTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled else { return }
-            writeToDisk()
+            writeContent()
         }
     }
 
-    // MARK: - iCloud Monitoring
+    // MARK: - iCloud Change Handling
 
-    private func startMonitoring() {
-        guard iCloudAvailable else { return }
-
-        let query = NSMetadataQuery()
-        query.searchScopes = [NSMetadataQueryUbiquitousDocumentsScope]
-        query.predicate = NSPredicate(format: "%K == %@", NSMetadataItemFSNameKey, fileName)
-
-        NotificationCenter.default.addObserver(
-            forName: .NSMetadataQueryDidUpdate,
-            object: query,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.handleMetadataUpdate()
-            }
+    private func handleKVStoreChange(reason: Int?, changedKeys: [String]?) {
+        guard let reason,
+              let changedKeys,
+              changedKeys.contains(kvStoreKey) else {
+            return
         }
 
-        NotificationCenter.default.addObserver(
-            forName: .NSMetadataQueryDidFinishGathering,
-            object: query,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.handleMetadataUpdate()
+        switch reason {
+        case NSUbiquitousKeyValueStoreServerChange,
+             NSUbiquitousKeyValueStoreInitialSyncChange:
+            if let newContent = kvStore.string(forKey: kvStoreKey) {
+                soulText = newContent
+                writeToLocal()
+                syncStatus = .synced
             }
-        }
-
-        query.start()
-        self.metadataQuery = query
-
-        let presenter = MemoryFilePresenter(url: activeURL) { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.readFromDisk()
-            }
-        }
-        NSFileCoordinator.addFilePresenter(presenter)
-        self.filePresenter = presenter
-    }
-
-    private func handleMetadataUpdate() {
-        guard let query = metadataQuery else { return }
-        query.disableUpdates()
-        defer { query.enableUpdates() }
-
-        if query.resultCount > 0 {
-            if let item = query.result(at: 0) as? NSMetadataItem {
-                let status = item.value(forAttribute: NSMetadataUbiquitousItemDownloadingStatusKey) as? String
-                if status == NSMetadataUbiquitousItemDownloadingStatusCurrent ||
-                   status == NSMetadataUbiquitousItemDownloadingStatusDownloaded {
-                    iCloudSyncStatus = .synced
-                    readFromDisk()
-                } else {
-                    iCloudSyncStatus = .syncing
-                    if let url = iCloudURL {
-                        try? FileManager.default.startDownloadingUbiquitousItem(at: url)
-                    }
-                }
-            }
+        case NSUbiquitousKeyValueStoreQuotaViolationChange:
+            syncStatus = .error
+        case NSUbiquitousKeyValueStoreAccountChange:
+            readContent()
+        default:
+            break
         }
     }
 
-    /// Clean up monitoring resources. Call before releasing the manager.
     func teardown() {
-        metadataQuery?.stop()
-        metadataQuery = nil
-        if let presenter = filePresenter {
-            NSFileCoordinator.removeFilePresenter(presenter)
-            filePresenter = nil
-        }
+        NotificationCenter.default.removeObserver(self)
     }
 }
