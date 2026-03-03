@@ -36,7 +36,7 @@ final class VoicePreviewManager {
 
         previewTask = Task { @MainActor in
             do {
-                let session = GeminiLiveSession(apiKey: apiKey, model: "gemini-2.0-flash-live-001")
+                let session = GeminiLiveSession(apiKey: apiKey)
                 self.previewSession = session
 
                 // Set up handler to collect audio data

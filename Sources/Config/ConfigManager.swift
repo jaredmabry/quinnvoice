@@ -297,7 +297,12 @@ struct AppConfig: Codable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.geminiApiKey = "" // Loaded separately from Keychain
-        self.geminiModel = try container.decodeIfPresent(String.self, forKey: .geminiModel) ?? "gemini-2.5-flash-native-audio-latest"
+        var loadedModel = try container.decodeIfPresent(String.self, forKey: .geminiModel) ?? "gemini-2.5-flash-native-audio-latest"
+        // Migrate defunct model names
+        if loadedModel.contains("gemini-live-") || loadedModel == "gemini-2.0-flash-live-001" {
+            loadedModel = "gemini-2.5-flash-native-audio-latest"
+        }
+        self.geminiModel = loadedModel
         self.openclawUrl = try container.decodeIfPresent(String.self, forKey: .openclawUrl) ?? "http://127.0.0.1:18789"
         self.voiceConfig = try container.decodeIfPresent(VoiceConfig.self, forKey: .voiceConfig) ?? .default
         self.continuousMode = try container.decodeIfPresent(Bool.self, forKey: .continuousMode) ?? true

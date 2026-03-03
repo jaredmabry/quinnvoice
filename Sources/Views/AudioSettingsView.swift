@@ -172,40 +172,69 @@ struct AudioSettingsView: View {
         testCountdown = 5
         currentMicLevel = 0
 
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-        let hardwareFormat = inputNode.outputFormat(forBus: 0)
-
-        let tapFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: hardwareFormat.sampleRate,
-            channels: 1,
-            interleaved: false
-        )!
-
-        inputNode.installTap(onBus: 0, bufferSize: 1600, format: tapFormat) { buffer, _ in
-            let level = AudioBufferConverter.rmsLevel(of: buffer)
-            Task { @MainActor in
-                self.currentMicLevel = level
+        // Check microphone permission first
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            break
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                Task { @MainActor in
+                    if granted {
+                        self.startMicTest()
+                    } else {
+                        self.isTesting = false
+                    }
+                }
             }
-        }
-
-        do {
-            try engine.start()
-            testEngine = engine
-        } catch {
+            return
+        default:
             isTesting = false
             return
         }
 
-        // Countdown timer
-        testTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            Task { @MainActor in
-                testCountdown -= 1
-                if testCountdown <= 0 {
-                    stopMicTest()
+        do {
+            let engine = AVAudioEngine()
+
+            // Prepare the engine first to avoid crashes on inputNode access
+            engine.prepare()
+
+            let inputNode = engine.inputNode
+            let hardwareFormat = inputNode.outputFormat(forBus: 0)
+
+            guard hardwareFormat.sampleRate > 0 else {
+                isTesting = false
+                return
+            }
+
+            let tapFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: hardwareFormat.sampleRate,
+                channels: 1,
+                interleaved: false
+            )!
+
+            inputNode.installTap(onBus: 0, bufferSize: 1600, format: tapFormat) { buffer, _ in
+                let level = AudioBufferConverter.rmsLevel(of: buffer)
+                Task { @MainActor in
+                    self.currentMicLevel = level
                 }
             }
+
+            try engine.start()
+            testEngine = engine
+
+            // Countdown timer
+            testTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+                Task { @MainActor in
+                    testCountdown -= 1
+                    if testCountdown <= 0 {
+                        stopMicTest()
+                    }
+                }
+            }
+        } catch {
+            isTesting = false
+            testEngine = nil
         }
     }
 
