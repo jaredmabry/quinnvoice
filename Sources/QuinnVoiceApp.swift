@@ -99,9 +99,9 @@ struct QuinnVoiceApp: App {
                 profileManager: profileManager,
                 updateManager: updateManager
             )
-            .frame(minWidth: 550, minHeight: 650)
+            .frame(minWidth: 700, minHeight: 550)
         }
-        .defaultSize(width: 550, height: 650)
+        .defaultSize(width: 700, height: 550)
         .windowResizability(.contentSize)
 
         Window("Conversation History", id: "conversation-history") {

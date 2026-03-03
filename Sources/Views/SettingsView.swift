@@ -10,72 +10,104 @@ struct SettingsView: View {
     var updateManager: UpdateManager?
 
     @Environment(\.dismiss) private var dismiss
+    @State private var selectedTab: SettingsTab = .general
 
-    var body: some View {
-        TabView {
-            GeneralTab(configManager: configManager)
-                .tabItem {
-                    Label("General", systemImage: "gear")
-                }
+    enum SettingsTab: String, CaseIterable, Identifiable {
+        case general, voice, hotkey, personality, memory, profiles, appearance, audio, agent, advanced, updates
 
-            VoiceTab(configManager: configManager)
-                .tabItem {
-                    Label("Voice", systemImage: "waveform")
-                }
+        var id: String { rawValue }
 
-            HotkeyTab(configManager: configManager)
-                .tabItem {
-                    Label("Hotkey", systemImage: "keyboard")
-                }
-
-            PersonalityTab(configManager: configManager, soulManager: soulManager)
-                .tabItem {
-                    Label("Personality", systemImage: "person.fill")
-                }
-
-            MemoryTab(memoryManager: memoryManager)
-                .tabItem {
-                    Label("Memory", systemImage: "brain.head.profile")
-                }
-
-            if let profileManager {
-                ProfileSettingsView(profileManager: profileManager, configManager: configManager)
-                    .tabItem {
-                        Label("Profiles", systemImage: "person.2.fill")
-                    }
-            }
-
-            AppearanceSettingsView(configManager: configManager)
-                .tabItem {
-                    Label("Appearance", systemImage: "paintbrush.fill")
-                }
-
-            AudioSettingsView(configManager: configManager)
-                .tabItem {
-                    Label("Audio", systemImage: "mic.fill")
-                }
-
-            AgentTab(configManager: configManager)
-                .tabItem {
-                    Label("Agent", systemImage: "cpu")
-                }
-
-            AdvancedTab(configManager: configManager)
-                .tabItem {
-                    Label("Advanced", systemImage: "wrench.and.screwdriver")
-                }
-
-            if let updateManager {
-                UpdateSettingsView(updateManager: updateManager, configManager: configManager)
-                    .tabItem {
-                        Label("Updates", systemImage: "arrow.triangle.2.circlepath")
-                    }
+        var label: String {
+            switch self {
+            case .general: return "General"
+            case .voice: return "Voice"
+            case .hotkey: return "Hotkey"
+            case .personality: return "Personality"
+            case .memory: return "Memory"
+            case .profiles: return "Profiles"
+            case .appearance: return "Appearance"
+            case .audio: return "Audio"
+            case .agent: return "Agent"
+            case .advanced: return "Advanced"
+            case .updates: return "Updates"
             }
         }
-        .tabViewStyle(.automatic)
-        .frame(width: 550, height: 650)
+
+        var icon: String {
+            switch self {
+            case .general: return "gear"
+            case .voice: return "waveform"
+            case .hotkey: return "keyboard"
+            case .personality: return "person.fill"
+            case .memory: return "brain.head.profile"
+            case .profiles: return "person.2.fill"
+            case .appearance: return "paintbrush.fill"
+            case .audio: return "mic.fill"
+            case .agent: return "cpu"
+            case .advanced: return "wrench.and.screwdriver"
+            case .updates: return "arrow.triangle.2.circlepath"
+            }
+        }
+    }
+
+    var body: some View {
+        NavigationSplitView {
+            List(SettingsTab.allCases, selection: $selectedTab) { tab in
+                Label(tab.label, systemImage: tab.icon)
+                    .tag(tab)
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
+        } detail: {
+            ScrollView {
+                detailView
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .frame(width: 700, height: 550)
         .onDisappear {
             configManager.save()
+        }
+    }
+
+    @ViewBuilder
+    private var detailView: some View {
+        switch selectedTab {
+        case .general:
+            GeneralTab(configManager: configManager)
+        case .voice:
+            VoiceTab(configManager: configManager)
+        case .hotkey:
+            HotkeyTab(configManager: configManager)
+        case .personality:
+            PersonalityTab(configManager: configManager, soulManager: soulManager)
+        case .memory:
+            MemoryTab(memoryManager: memoryManager)
+        case .profiles:
+            if let profileManager {
+                ProfileSettingsView(profileManager: profileManager, configManager: configManager)
+            } else {
+                Text("Profiles unavailable")
+                    .foregroundStyle(.secondary)
+            }
+        case .appearance:
+            AppearanceSettingsView(configManager: configManager)
+        case .audio:
+            AudioSettingsView(configManager: configManager)
+        case .agent:
+            AgentTab(configManager: configManager)
+        case .advanced:
+            AdvancedTab(configManager: configManager)
+        case .updates:
+            if let updateManager {
+                UpdateSettingsView(updateManager: updateManager, configManager: configManager)
+            } else {
+                Text("Updates unavailable")
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }
