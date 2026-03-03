@@ -77,13 +77,16 @@ struct QuinnVoiceApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Settings {
+        Window("QuinnVoice Settings", id: "settings") {
             SettingsView(
                 configManager: configManager,
                 memoryManager: memoryManager,
                 soulManager: soulManager
             )
+            .frame(minWidth: 550, minHeight: 650)
         }
+        .defaultSize(width: 550, height: 650)
+        .windowResizability(.contentSize)
 
         Window("Conversation History", id: "conversation-history") {
             ConversationHistoryView(store: conversationStore)
@@ -109,7 +112,7 @@ struct QuinnVoiceApp: App {
     private func openSettings() {
         appState.showSettings = true
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        openWindow(id: "settings")
     }
 
     private func startSession() {
