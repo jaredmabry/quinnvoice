@@ -227,7 +227,7 @@ struct AppConfig: Codable, Sendable {
     static let defaultOptionModifier: UInt = 524288 // NSEvent.ModifierFlags.option.rawValue
 
     init(geminiApiKey: String = "",
-         geminiModel: String = "gemini-live-2.5-flash-native-audio",
+         geminiModel: String = "gemini-2.5-flash-native-audio-latest",
          openclawUrl: String = "http://127.0.0.1:18789",
          voiceConfig: VoiceConfig = .default,
          continuousMode: Bool = true,
@@ -297,7 +297,7 @@ struct AppConfig: Codable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.geminiApiKey = "" // Loaded separately from Keychain
-        self.geminiModel = try container.decodeIfPresent(String.self, forKey: .geminiModel) ?? "gemini-live-2.5-flash-native-audio"
+        self.geminiModel = try container.decodeIfPresent(String.self, forKey: .geminiModel) ?? "gemini-2.5-flash-native-audio-latest"
         self.openclawUrl = try container.decodeIfPresent(String.self, forKey: .openclawUrl) ?? "http://127.0.0.1:18789"
         self.voiceConfig = try container.decodeIfPresent(VoiceConfig.self, forKey: .voiceConfig) ?? .default
         self.continuousMode = try container.decodeIfPresent(Bool.self, forKey: .continuousMode) ?? true

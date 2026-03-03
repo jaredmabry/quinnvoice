@@ -45,7 +45,7 @@ actor GeminiLiveSession {
 
     // MARK: - Init
 
-    init(apiKey: String, model: String = "gemini-live-2.5-flash-native-audio") {
+    init(apiKey: String, model: String = "gemini-2.5-flash-native-audio-latest") {
         self.apiKey = apiKey
         self.model = model
         self.urlSession = URLSession(configuration: .default)

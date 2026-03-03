@@ -124,10 +124,12 @@ struct GeneralTab: View {
                     .textFieldStyle(.roundedBorder)
 
                 Picker("Model", selection: $configManager.config.geminiModel) {
-                    Text("Gemini Live 2.5 Flash (Native Audio)")
-                        .tag("gemini-live-2.5-flash-native-audio")
-                    Text("Gemini Live 2.0 Flash")
-                        .tag("gemini-2.0-flash-live-001")
+                    Text("Gemini 2.5 Flash Native Audio (Latest)")
+                        .tag("gemini-2.5-flash-native-audio-latest")
+                    Text("Gemini 2.5 Flash Native Audio (Dec 2025)")
+                        .tag("gemini-2.5-flash-native-audio-preview-12-2025")
+                    Text("Gemini 2.5 Flash Native Audio (Sep 2025)")
+                        .tag("gemini-2.5-flash-native-audio-preview-09-2025")
                 }
             }
 
