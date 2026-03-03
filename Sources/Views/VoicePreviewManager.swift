@@ -21,9 +21,6 @@ final class VoicePreviewManager {
     private var collectedAudioData = Data()
     private var previewTask: Task<Void, Never>?
 
-    /// The sample phrase used for voice preview.
-    static let samplePhrase = "Hi, I'm Quinn. How can I help you today?"
-
     /// Preview a voice by sending a sample phrase to Gemini Live and playing the response audio.
     func previewVoice(name: String, apiKey: String) {
         // Cancel any existing preview
@@ -55,7 +52,7 @@ final class VoicePreviewManager {
                         case .setupComplete:
                             // Send a text message to trigger audio response
                             Task {
-                                try? await session.sendText(Self.samplePhrase)
+                                try? await session.sendText("Say a brief friendly greeting introducing yourself as Quinn, a voice assistant. Keep it to one sentence.")
                             }
                         default:
                             break
@@ -65,7 +62,7 @@ final class VoicePreviewManager {
 
                 let voiceConfig = VoiceConfig(name: name, pitch: 0, speed: 1.0)
                 try await session.connect(
-                    systemInstruction: "Say exactly: \"\(Self.samplePhrase)\" and nothing else. Do not add any extra words.",
+                    systemInstruction: "You are Quinn, a friendly voice assistant. When asked to greet, respond with a brief, natural greeting. Keep responses very short.",
                     voiceConfig: voiceConfig
                 )
 

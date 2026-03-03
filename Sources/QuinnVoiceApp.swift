@@ -187,6 +187,11 @@ struct QuinnVoiceApp: App {
 
         // Set up hotkey manager with configurable key
         if configManager.config.hotkeyEnabled {
+            // Check and prompt for Accessibility permissions (required for global hotkeys)
+            if !HotkeyManager.checkAccessibilityPermissions(prompt: true) {
+                print("[QuinnVoice] Accessibility permission not yet granted — global hotkey will activate once approved")
+            }
+
             hotkeyManager.mode = configManager.config.hotkeyMode
             hotkeyManager.configure(
                 keyCode: configManager.config.hotkeyKeyCode,
